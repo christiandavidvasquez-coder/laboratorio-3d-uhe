@@ -199,6 +199,20 @@ a.btnlink{display:block;text-align:center;text-decoration:none;color:inherit;box
 
 .badge.b-ecu{background:#F7632F;color:#fff;font-weight:700;letter-spacing:.02em}
 .shu{font-variant-numeric:tabular-nums}
+
+#fab{position:absolute;top:10px;left:10px;z-index:6;display:flex;gap:6px;flex-wrap:wrap}
+#fab button{display:flex;align-items:center;gap:6px;background:rgba(27,39,43,.92);color:#fff;border:1px solid #F7632F;border-radius:999px;padding:7px 12px;font:600 13px 'Libre Franklin',sans-serif;cursor:pointer;backdrop-filter:blur(6px)}
+#fab button:hover{background:#F7632F}#fab .ico{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2}
+#app.nopanel,#panel.hidden{}#panel.hidden{display:none}
+@media (min-width:821px){#app:has(#panel.hidden){grid-template-columns:1fr}}
+@media (max-width:820px){#fab{top:8px;left:8px}#fab button{padding:8px 11px;font-size:12px}#fab button span{display:none}#fab #fabHome span{display:inline}
+ #panel #toggle{display:none!important}
+ #panel.min{max-height:auto}}
+
+#sruler{position:absolute;bottom:42px;z-index:4;pointer-events:none;display:flex;flex-direction:column;align-items:flex-start;gap:3px}
+#sruler rect{fill:#f4efe4}#sruler line{stroke:#1b272b;stroke-width:1.2}#sruler text{fill:#1b272b;font:700 10px 'Libre Franklin',sans-serif}
+#sruler span{font:600 11.5px 'Libre Franklin',sans-serif;color:#f39a76;text-shadow:0 1px 3px #000}
+@media (max-width:820px){#sruler{bottom:8px}}
 </style>
 <script type="importmap">
 {"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}
@@ -1855,8 +1869,8 @@ const stage=document.getElementById('stage'),canvas=document.getElementById('c')
 const renderer=new THREE.WebGLRenderer({canvas,antialias:true,alpha:true});
 renderer.setPixelRatio(Math.min(2,window.devicePixelRatio||1));renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.05;
 const scene=new THREE.Scene();const pm=new THREE.PMREMGenerator(renderer);scene.environment=pm.fromScene(new RoomEnvironment(),.04).texture;
-scene.add(new THREE.HemisphereLight(0xffffff,0x334048,.5));const dl=new THREE.DirectionalLight(0xffffff,1.2);dl.position.set(5,10,7);scene.add(dl);
-const camera=new THREE.PerspectiveCamera(38,1,.1,300);
+scene.add(new THREE.HemisphereLight(0xffffff,0x8d8678,.8));const dl=new THREE.DirectionalLight(0xffffff,.55);dl.position.set(5,10,7);scene.add(dl);{const lb=new THREE.DirectionalLight(0xfff4e8,.45);lb.position.set(-2,-10,3);scene.add(lb);}
+const camera=new THREE.PerspectiveCamera(38,1,.1,300);scene.add(camera);{/* luz que acompaña a la cámara: la pieza queda iluminada desde cualquier ángulo, incluso desde abajo */const key=new THREE.DirectionalLight(0xffffff,1.05);key.position.set(2.5,3,2);const fill=new THREE.DirectionalLight(0xdfe8ff,.4);fill.position.set(-3,-2,1);const tg=new THREE.Object3D();tg.position.set(0,0,-6);camera.add(key,fill,tg);key.target=tg;fill.target=tg;}
 const controls=new OrbitControls(camera,canvas);controls.enableDamping=true;controls.dampingFactor=.08;controls.autoRotateSpeed=1.2;controls.minDistance=2;controls.maxDistance=90;
 
 /* ================= SECCIONES ================= */
@@ -1899,7 +1913,7 @@ const nameOf=id=>OBJ[id]?.sp?.name||id;
 function setInfo(t,s,html){$('info').hidden=false;$('iT').textContent=t;$('iS').textContent=s;$('iD').innerHTML=html;}
 function showInfo(id,key,extra=''){const a=getInfo(id,key);if(!a)return;
   setInfo(a[0],key.startsWith('intro')?sciOf(id):nameOf(id),a[1].split('|').map(p=>`<p>${p}</p>`).join('')+(key==='intro'&&FAT[id]?fatBlock(id):'')+extra);}
-$('infoX').onclick=()=>$('info').hidden=true;
+$('infoX').onclick=()=>{$('info').hidden=true;window.__noCard=true;frame();};
 $('fatBtn').onclick=()=>setInfo('Clasificación por contenido graso','Pescados blancos, semigrasos y azules',FAT_GENERAL+fatChart(FISH_IDS.filter(id=>FAT[id]))+'<p style="font-size:12px;color:#9fb0b5">La albacora (aleta amarilla) se agrupa con los azules por tradición, aunque su músculo es magro. En el atún rojo, la ventresca supera ampliamente el promedio.</p>');
 $('ovlX').onclick=()=>$('ovl').hidden=true;
 function overlay(t,html){$('oT').textContent=t;$('oD').innerHTML=html;$('ovl').hidden=false;}
@@ -2252,6 +2266,12 @@ showHome();
 
 window.__fitVis=(k=1.05)=>{const O=OBJ[st.sp];if(!O)return 0;const bb=new THREE.Box3();O.root.updateMatrixWorld(true);O.root.traverse(m=>{if(m.isMesh&&shown(m)&&!m.userData.isHL&&m.geometry){if(!m.geometry.boundingBox)m.geometry.computeBoundingBox();bb.union(m.geometry.boundingBox.clone().applyMatrix4(m.matrixWorld));}});
   if(bb.isEmpty())return 0;const c=bb.getCenter(new V()),r=bb.getSize(new V()).length()/2;const dir=camera.position.clone().sub(controls.target).normalize();const dist=r/Math.sin(Math.min(camera.fov,camera.fov*camera.aspect)*PI/360)*k;c.y-=r*0.12;controls.target.copy(c);camera.position.copy(c).addScaledVector(dir,dist);controls.update();return r;};
+
+/* barra flotante: siempre visible, también en el móvil */
+{const f=document.createElement('div');f.id='fab';f.innerHTML=`<button id="fabHome" aria-label="Menú principal"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11 12 4l8 7v9h-5v-6H9v6H4z"/></svg><span>Inicio</span></button><button id="fabCtl" aria-label="Mostrar u ocultar controles"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg><span>Controles</span></button><button id="fabRe" aria-label="Recentrar vista"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg><span>Recentrar</span></button><button id="fabInfo" aria-label="Mostrar ficha"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></svg><span>Ficha</span></button>`;
+ stage.appendChild(f);$('fabHome').onclick=()=>showHome();$('fabRe').onclick=()=>$('resetCam').click();
+ $('fabCtl').onclick=()=>{const p=$('panel');if(window.innerWidth<=820){p.classList.toggle('min');}else{p.classList.toggle('hidden');setTimeout(resize,50);}};
+ $('fabInfo').onclick=()=>{window.__noCard=false;$('info').hidden=false;intro();frame();};}
 
 /* ================= MÓDULOS: base común ================= */
 function mkO(sec,id,name,sci){const root=new THREE.Group();root.userData.sp=id;return {sp:{id,name,sci},section:sec,root,labels:[]};}
@@ -3848,22 +3868,36 @@ function coinTex(){const n=512,c=document.createElement('canvas');c.width=c.heig
   x.fillStyle='rgba(80,38,18,.85)';x.font='bold 170px Libre Franklin, sans-serif';x.textAlign='center';x.textBaseline='middle';x.fillText('1¢',n/2,n/2+6);const t=new THREE.CanvasTexture(c);t.colorSpace=THREE.SRGBColorSpace;return t;}
 const NICE=[.5,1,2,3,5,10,20,30,50,100,200];
 let SREF=null;
-function updSizeRef(){if(SREF){SREF.parent&&SREF.parent.remove(SREF);SREF.traverse(o=>{if(o.geometry)o.geometry.dispose();});SREF=null;}
+let HUDR=null;
+function updSizeRef(){HUDR=null;if(SREF){SREF.parent&&SREF.parent.remove(SREF);SREF.traverse(o=>{if(o.geometry)o.geometry.dispose();});SREF=null;}
   const cmu=cmPerUnit();if(!cmu)return;
   const bb=new THREE.Box3();for(const O of Object.values(OBJ))if(O.root.visible&&O.section===st.sec)bb.union(visBox(O.root));const host=OBJ[st.sp]&&OBJ[st.sp].section===st.sec&&OBJ[st.sp].root.position.lengthSq()<1e-6&&OBJ[st.sp].root.scale.x===1?OBJ[st.sp].root:scene;if(bb.isEmpty()||!isFinite(bb.min.x))return;
   const sz=bb.getSize(new V()),c=bb.getCenter(new V()),realX=Math.max(sz.x,sz.y)*cmu;let cm=NICE[0];for(const v of NICE)if(v<=realX*.6)cm=v;
-  const G=new THREE.Group();G.userData.sizeRef=true;const len=cm/cmu,hh=len*.1,step=cm>=100?(cm>=200?50:10):cm>=20?(cm>=50?10:5):cm>=5?1:cm>=2?.5:.1;
-  const R=new THREE.Group();G.add(R);
-  const face=new THREE.Mesh(new THREE.PlaneGeometry(len,hh),new THREE.MeshBasicMaterial({map:rulerTex(cm,step)}));face.position.z=hh*.09;R.add(face);
-  const back=new THREE.Mesh(new THREE.BoxGeometry(len,hh,hh*.12),new THREE.MeshStandardMaterial({color:'#d9d0bd',roughness:.7}));R.add(back);
-  const y0=bb.min.y-hh*.6;c.z=bb.max.z+hh*1.5;R.position.set(c.x,y0,c.z);
-  const fs=Math.max(sz.x,sz.y)*.05;const bill=o=>{o.onBeforeRender=()=>{o.parent.quaternion.copy(camera.quaternion);};};bill(face);
-  const lab=txtSprite(`${String(cm).replace('.',',')} cm · escala aproximada`,fs,'#f39a76');lab.position.set(R.position.x,y0-hh*.5-fs*.8,c.z);G.add(lab);
-  if(realX<=45){const r=.9525/cmu,h=.152/cmu,tx=coinTex();tx.center.set(.5,.5);tx.rotation=PI/2;const _u=0,m=[new THREE.MeshStandardMaterial({color:'#9a5a33',metalness:.7,roughness:.35}),new THREE.MeshStandardMaterial({map:tx,metalness:.6,roughness:.35}),new THREE.MeshStandardMaterial({map:tx,metalness:.6,roughness:.35})];
-    const coin=new THREE.Mesh(new THREE.CylinderGeometry(r,r,h,48),m);coin.rotation.x=PI/2;const CG=new THREE.Group();CG.add(coin);CG.position.set(R.position.x+len/2+r*1.6+fs,y0,c.z);G.add(CG);bill(coin);
-    const cl=txtSprite('1 ¢ USD · Ø 19,05 mm',fs*.85,'#e6b48f');cl.position.set(CG.position.x+r*.5,y0-Math.max(r,hh*.5)-fs*.8,c.z);G.add(cl);}
+  const G=new THREE.Group();G.userData.sizeRef=true;const fs=Math.max(sz.x,sz.y)*.05;const bill=o=>{o.onBeforeRender=()=>{o.parent.quaternion.copy(camera.quaternion);};};
+  const y0=bb.min.y-Math.max(sz.y*.08,.02);c.z=bb.max.z;
+  if(realX<=12){/* piezas pequeñas: se comparan con un objeto conocido */
+    const r=.9525/cmu,h=.152/cmu,tx=coinTex();tx.center.set(.5,.5);tx.rotation=PI/2;const m=[new THREE.MeshStandardMaterial({color:'#9a5a33',metalness:.7,roughness:.35}),new THREE.MeshStandardMaterial({map:tx,metalness:.6,roughness:.35}),new THREE.MeshStandardMaterial({map:tx,metalness:.6,roughness:.35})];
+    const coin=new THREE.Mesh(new THREE.CylinderGeometry(r,r,h,48),m);coin.rotation.x=PI/2;const CG=new THREE.Group();CG.add(coin);CG.position.set(bb.max.x+r*1.3,bb.min.y+r,c.z);G.add(CG);bill(coin);
+    const f2=Math.max(fs,r*.32);const cl=txtSprite('1 centavo de dólar · Ø 19,05 mm',f2,'#e6b48f');cl.position.set(CG.position.x,bb.min.y-f2*.9,c.z);G.add(cl);}
+  else{/* piezas grandes: regla en pantalla, siempre legible y sin tapar la pieza */HUDR={c:bb.getCenter(new V()),cmu};}
   G.traverse(o=>{if(o.isMesh)o.userData.key='escala_ref';});host.add(SREF=G);}
 window.updSizeRef=updSizeRef;window.applyShift=applyShift;
+
+/* regla en pantalla: se recalcula en cada cuadro según el zoom */
+{const el=document.createElement('div');el.id='sruler';stage.appendChild(el);let last='';const R=new V(),A=new V(),B=new V();
+ const NC=[.5,1,2,5,10,20,25,50,100,200];
+ function loop(){requestAnimationFrame(loop);if(!HUDR){if(el.style.display!=='none')el.style.display='none';last='';return;}
+  const w=canvas.clientWidth,h=canvas.clientHeight;camera.updateMatrixWorld();R.setFromMatrixColumn(camera.matrixWorld,0).normalize();
+  A.copy(HUDR.c).project(camera);B.copy(HUDR.c).addScaledVector(R,1/HUDR.cmu).project(camera);const pxcm=Math.abs(B.x-A.x)*w/2;if(!isFinite(pxcm)||pxcm<=0){el.style.display='none';return;}
+  const maxW=Math.min(w*.5,520);let cm=NC[0];for(const v of NC)if(v*pxcm<=maxW)cm=v;const px=Math.round(cm*pxcm);
+  const step=cm>=100?10:cm>=20?5:cm>=5?1:cm>=2?.5:.1,lab=cm>=5||cm%1===0;
+  let cx=(A.x+1)/2*w;cx=Math.max(px/2+12,Math.min(w-px/2-12,cx));
+  const key=cm+'|'+px;el.style.display='';el.style.left=(cx-px/2)+'px';
+  if(key===last)return;last=key;
+  let t='';const n=Math.round(cm/step);for(let k=0;k<=n;k++){const x=(k*step*pxcm).toFixed(1),maj=k%(step<1?Math.round(1/step):(cm>=100?5:cm>=20?2:5))===0||k===n;t+=`<line x1="${x}" x2="${x}" y1="0" y2="${maj?12:7}"/>`;}
+  const nl=cm>=100?[0,cm/2,cm]:cm>=20?[0,cm/2,cm]:[0,cm];let tx='';for(const v of nl)tx+=`<text x="${(v*pxcm).toFixed(1)}" y="24" text-anchor="${v===0?'start':v===cm?'end':'middle'}">${String(v).replace('.',',')}</text>`;
+  el.innerHTML=`<svg width="${px+2}" height="28" viewBox="-1 0 ${px+2} 28"><rect x="0" y="0" width="${px}" height="28" rx="2"/>${t}${tx}</svg><span>${String(cm).replace('.',',')} cm · escala aproximada</span>`;}
+ loop();}
 </script>
 </body>
 </html>
