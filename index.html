@@ -2011,9 +2011,9 @@ function layout(){
   if(st.mode==='des')st.expCur=0;
 }
 function frame(){
-  const cmp=st.sp==='comparar',ox=(stage.clientWidth>900&&!window.__noCard)?2.4:0;let p,t;
+  const cmp=st.sp==='comparar',ox=0;let p,t;window.applyShift&&window.applyShift();window.updSizeRef&&window.updSizeRef();
   if(st.sec==='pescados'){const tuna=!cmp&&SPECIES[st.sp].kind==='tuna';
-    if(cmp){p=[ox+5,0,stage.clientWidth<700?115:82];t=[ox+5,0,0];}
+    if(cmp){p=[0,0,stage.clientWidth<700?115:88];t=[0,0,0];}
     else if(st.sp==='lenguado'&&st.lying){p=[1.5+ox,17,11.5];t=[ox,0,0];}
     else if(st.mode==='esq'){p=[4+ox,4.5,tuna?19:17];t=[ox,0,0];}
     else{p=[2.5+ox,1.8,tuna?20:19];t=[ox,0,0];}}
@@ -2118,7 +2118,7 @@ canvas.addEventListener('pointerup',e=>{
   }
 });
 const tmp=new V();
-function resize(){const w=stage.clientWidth,h=stage.clientHeight;renderer.setSize(w,h,false);camera.aspect=w/h;camera.updateProjectionMatrix();}
+function resize(){const w=stage.clientWidth,h=stage.clientHeight;renderer.setSize(w,h,false);camera.aspect=w/h;camera.updateProjectionMatrix();window.applyShift&&window.applyShift();}
 new ResizeObserver(resize).observe(stage);resize();
 let _shF=0;
 function tick(){
@@ -2336,14 +2336,14 @@ function quiz(sec,title){const Q=QUIZ[sec];if(!Q)return;let i=0,ok=0;const order
 /* encuadre por caja de lo visible */
 function visBox(root){const bb=new THREE.Box3();root.updateMatrixWorld(true);root.traverse(m=>{if((m.isMesh||m.isSprite)&&!m.userData.isHL&&shown(m)){if(m.isSprite){bb.expandByPoint(m.getWorldPosition(new V()));return;}if(!m.geometry.boundingBox)m.geometry.computeBoundingBox();bb.union(m.geometry.boundingBox.clone().applyMatrix4(m.matrixWorld));}});return bb.isEmpty()?new THREE.Box3().setFromObject(root):bb;}
 function fitCam(root,ox,dir=[.35,.32,1],k=1.1){root.updateMatrixWorld(true);const bb=visBox(root);if(!isFinite(bb.min.x))return [[0,2,30],[0,0,0]];
-  const c=bb.getCenter(new V()),D=new V(...dir).normalize(),xr=ox>0?1-2*.345:1,pts=[];for(const x of [bb.min.x,bb.max.x])for(const y of [bb.min.y,bb.max.y])for(const z of [bb.min.z,bb.max.z])pts.push(new V(x,y,z));
+  const sh=typeof viewShift==='function'?viewShift():0;camera.clearViewOffset();camera.updateProjectionMatrix();const c=bb.getCenter(new V()),D=new V(...dir).normalize(),xr=sh>0?1-2*.345:1,pts=[];for(const x of [bb.min.x,bb.max.x])for(const y of [bb.min.y,bb.max.y])for(const z of [bb.min.z,bb.max.z])pts.push(new V(x,y,z));
   const right=new V(0,1,0).cross(D).normalize(),up=D.clone().cross(right).normalize();let t=c.clone(),dist=bb.getSize(new V()).length()*1.2+5;
   for(let it=0;it<12;it++){camera.position.copy(t).addScaledVector(D,dist);camera.lookAt(t);camera.updateMatrixWorld(true);
     let x0=9,x1=-9,y0=9,y1=-9;for(const p of pts){const q=p.clone().project(camera);x0=Math.min(x0,q.x);x1=Math.max(x1,q.x);y0=Math.min(y0,q.y);y1=Math.max(y1,q.y);}
     const hw=dist*Math.tan(camera.fov*PI/360)*camera.aspect,hh=dist*Math.tan(camera.fov*PI/360);
-    t.addScaledVector(right,((x0+x1)/2-(xr-1)/2)*hw).addScaledVector(up,(y0+y1)/2*hh*.9);
+    t.addScaledVector(right,((x0+x1)/2)*hw).addScaledVector(up,(y0+y1)/2*hh*.9);
     dist*=Math.min(3,Math.max(.3,Math.max((x1-x0)/(xr+1),(y1-y0)/2)));}
-  dist*=k;return [t.clone().addScaledVector(D,dist).toArray(),t.toArray()];}
+  dist*=k;if(typeof applyShift==='function')applyShift();return [t.clone().addScaledVector(D,dist).toArray(),t.toArray()];}
 
 /* barra de separación de piezas (todas las secciones nuevas) */
 st.mExp=0;st.mExpCur=0;
@@ -3775,7 +3775,7 @@ function buildScale(){const G=new THREE.Group();G.userData.vm=['escala'];
   const hl=new THREE.Mesh(new THREE.TorusGeometry(.75,.08,8,32),mat('hlA',{color:'#F7632F',emissive:'#F7632F',emissiveIntensity:.6}));hl.userData.key='escala';G.add(hl);G.userData.hl=hl;
   return G;}
 const ajiItems={};
-AJI_IDS.forEach(id=>{const A=AJI[id];ajiItems[id]={n:A.n,sub:A.sub,sci:A.sci,ecu:A.reg==='ec',dir:{fruto:[.25,.35,1],corte:[.3,.7,.8],escala:[0,.15,1]},k:1.05,
+AJI_IDS.forEach(id=>{const A=AJI[id];ajiItems[id]={n:A.n,sub:A.sub,sci:A.sci,ecu:false,dir:{fruto:[.25,.35,1],corte:[.3,.7,.8],escala:[0,.15,1]},k:1.05,
   intro:{fruto:[A.n,`<p><span class="badge" style="background:${AJI_REG[A.reg][1]};color:#fff">${AJI_REG[A.reg][0]}</span> <span class="shu">${A.shu?(A.shu[0]===A.shu[1]?A.shu[0].toLocaleString('es-EC'):A.shu[0].toLocaleString('es-EC')+' – '+A.shu[1].toLocaleString('es-EC'))+' SHU':(A.est?'≈ '+A.est.toLocaleString('es-EC')+' SHU (estimado)':'Sin medición publicada')}</span></p>|`+A.t],
     corte:[A.n+' · dónde está el picor','La capsaicina se produce en las glándulas de la placenta (el tejido claro que sostiene las semillas) y en los tabiques; las semillas no la producen, solo se impregnan al tocarla. En C. chinense, cerca del 79 % de los capsaicinoides está en la placenta.|Quitar placenta y venas reduce el picor mucho más que quitar solo las semillas.'],
     escala:[A.n+' en la escala Scoville','Wilbur Scoville (1912) diluía el extracto del ají en agua azucarada hasta que un panel dejaba de percibir el picor: el número de diluciones son las SHU. Hoy se mide la concentración de capsaicinoides por HPLC y se convierte multiplicando las partes por millón por 16.|La escala es logarítmica: cada marca vale diez veces la anterior.']},
@@ -3818,6 +3818,52 @@ defMod('ajies',{title:'Ajíes: Ecuador, Perú, México y el mundo',spT:'Ají',qu
    {q:'El ají amarillo seco se llama…',o:['Mirasol','Panca','Guajillo','Ancho'],a:0,e:'En Perú: amarillo fresco, mirasol seco. En México, «mirasol» es otro chile que seco se llama guajillo.'},
    {q:'¿Cuál es el récord Guinness actual de picor?',o:['Pepper X','Carolina Reaper','Bhut jolokia','Habanero'],a:0,e:'2 693 000 SHU en promedio (2023).'}]
 });
+
+/* ================= SALMÓN: piel con el mismo tratamiento que la trucha ================= */
+SPECIES.salmon.paint='gen';delete FISH_TEX.salmon;
+SPECIES.salmon.pt={pal:['#f5f6f7','#eaeef1','#c8d1d9','#7a8fa2','#3f5569'],band:{phi:.12,col:'rgba(205,215,225,.35)',w:40},
+  spots:{n:420,col:'rgba(18,22,26,.85)',r0:2.5,r1:6,a:.25,b:1.5,pw:.6},sc:6,scA:.05,sheen:.14,head:'rgba(45,62,78,A)',headA:.28,op:'rgba(30,40,50,.5)'};
+
+/* ================= DESPLAZAMIENTO DE VISTA: el eje de giro queda a la izquierda, fuera de la ficha ================= */
+function viewShift(){return (stage.clientWidth>900&&!window.__noCard)?.1725:0;}
+function applyShift(){const s=viewShift(),w=stage.clientWidth,h=stage.clientHeight;if(s)camera.setViewOffset(w,h,s*w,0,w,h);else camera.clearViewOffset();camera.updateProjectionMatrix();}
+
+/* ================= ESCALA REAL: regla en cm y moneda de 1 centavo de dólar ================= */
+/* cm por unidad del modelo. Tamaños de un ejemplar comercial típico (aproximados). Peces: largo estándar (sin aleta caudal) = 10·tp unidades. */
+const FISH_SL={albacora:90,corvina:50,corvinilla:25,brujo:25,picudo:200,espada:150,mero:60,pargo:35,pargo_rojo:40,robalo:50,lisa:35,chame:25,tilapia:25,trucha:30,bagre:40,carachama:20,tiburon:180,gata:60,salmon:70,lenguado:35,atun_rojo:200};
+const CMU={vannamei:14/8.9,pollo:25/7.1,pavo:45/7.3,codorniz:12/6.9,guinea:22/7.1,bovino:260/9.6,porcino:150/9.8,ovino:130/8.6,
+  langostino:20/8.4,langosta:30/9,langostino_gal:25/7.6,concha:1,pulpo:4,calamar:10,cuy:3.5,conejo:3.2,chontacuro:.9,
+  cacao_nacional:20/9,cacao_ccn51:20/9.5,chamburo:1.2,toronche:1,babaco:2.2,naranjilla:1.15,tomate_arbol:1.1,uvilla:.8,mortino:1.25};
+const NO_SCALE_SEC=['salsas','vanguardia','bpm'];
+function cmPerUnit(){const s=st.sec,id=st.sp;if(NO_SCALE_SEC.includes(s)||id==='comparar')return null;
+  if(s==='pescados'){const sp=SPECIES[id];return FISH_SL[id]/(L*sp.tp);}
+  if(s==='vegetales'||s==='porciones')return 1;if(s==='despensa'&&st.mode==='uso')return null;if(s==='ajies')return (id==='escala'||st.mode==='escala')?null:1;
+  return CMU[id]||null;}
+function rulerTex(cm,step){const W=2048,H=200,c=document.createElement('canvas');c.width=W;c.height=H;const x=c.getContext('2d');x.fillStyle='#f4efe4';x.fillRect(0,0,W,H);x.fillStyle='#1d2427';
+  const n=Math.round(cm/step),minor=cm<=20?10:5;for(let i=0;i<=n*minor;i++){const px=24+i*(W-48)/(n*minor),maj=i%minor===0;x.fillRect(px-(maj?3:1.5),0,maj?6:3,maj?96:(i%(minor/2)===0&&minor===10?64:44));}
+  x.font='bold 70px Libre Franklin, sans-serif';x.textAlign='center';for(let i=0;i<=n;i++){const px=24+i*(W-48)/n;let t=String(Math.round(i*step));if(i===0)x.textAlign='left';else if(i===n)x.textAlign='right';else x.textAlign='center';x.fillText(t,i===0?px-6:i===n?px+6:px,H-28);}
+  x.fillStyle='#F7632F';x.fillRect(0,H-10,W,10);const t=new THREE.CanvasTexture(c);t.colorSpace=THREE.SRGBColorSpace;t.anisotropy=8;return t;}
+function coinTex(){const n=512,c=document.createElement('canvas');c.width=c.height=n;const x=c.getContext('2d');const g=x.createRadialGradient(n*.4,n*.35,n*.05,n/2,n/2,n/2);g.addColorStop(0,'#e6a77a');g.addColorStop(.7,'#b86a3e');g.addColorStop(1,'#8a4a2a');
+  x.fillStyle=g;x.beginPath();x.arc(n/2,n/2,n/2,0,7);x.fill();x.strokeStyle='rgba(90,45,22,.8)';x.lineWidth=14;x.beginPath();x.arc(n/2,n/2,n/2-18,0,7);x.stroke();
+  x.fillStyle='rgba(80,38,18,.85)';x.font='bold 170px Libre Franklin, sans-serif';x.textAlign='center';x.textBaseline='middle';x.fillText('1¢',n/2,n/2+6);const t=new THREE.CanvasTexture(c);t.colorSpace=THREE.SRGBColorSpace;return t;}
+const NICE=[.5,1,2,3,5,10,20,30,50,100,200];
+let SREF=null;
+function updSizeRef(){if(SREF){SREF.parent&&SREF.parent.remove(SREF);SREF.traverse(o=>{if(o.geometry)o.geometry.dispose();});SREF=null;}
+  const cmu=cmPerUnit();if(!cmu)return;
+  const bb=new THREE.Box3();for(const O of Object.values(OBJ))if(O.root.visible&&O.section===st.sec)bb.union(visBox(O.root));const host=OBJ[st.sp]&&OBJ[st.sp].section===st.sec&&OBJ[st.sp].root.position.lengthSq()<1e-6&&OBJ[st.sp].root.scale.x===1?OBJ[st.sp].root:scene;if(bb.isEmpty()||!isFinite(bb.min.x))return;
+  const sz=bb.getSize(new V()),c=bb.getCenter(new V()),realX=Math.max(sz.x,sz.y)*cmu;let cm=NICE[0];for(const v of NICE)if(v<=realX*.6)cm=v;
+  const G=new THREE.Group();G.userData.sizeRef=true;const len=cm/cmu,hh=len*.1,step=cm>=100?(cm>=200?50:10):cm>=20?(cm>=50?10:5):cm>=5?1:cm>=2?.5:.1;
+  const R=new THREE.Group();G.add(R);
+  const face=new THREE.Mesh(new THREE.PlaneGeometry(len,hh),new THREE.MeshBasicMaterial({map:rulerTex(cm,step)}));face.position.z=hh*.09;R.add(face);
+  const back=new THREE.Mesh(new THREE.BoxGeometry(len,hh,hh*.12),new THREE.MeshStandardMaterial({color:'#d9d0bd',roughness:.7}));R.add(back);
+  const y0=bb.min.y-hh*.6;c.z=bb.max.z+hh*1.5;R.position.set(c.x,y0,c.z);
+  const fs=Math.max(sz.x,sz.y)*.05;const bill=o=>{o.onBeforeRender=()=>{o.parent.quaternion.copy(camera.quaternion);};};bill(face);
+  const lab=txtSprite(`${String(cm).replace('.',',')} cm · escala aproximada`,fs,'#f39a76');lab.position.set(R.position.x,y0-hh*.5-fs*.8,c.z);G.add(lab);
+  if(realX<=45){const r=.9525/cmu,h=.152/cmu,tx=coinTex();tx.center.set(.5,.5);tx.rotation=PI/2;const _u=0,m=[new THREE.MeshStandardMaterial({color:'#9a5a33',metalness:.7,roughness:.35}),new THREE.MeshStandardMaterial({map:tx,metalness:.6,roughness:.35}),new THREE.MeshStandardMaterial({map:tx,metalness:.6,roughness:.35})];
+    const coin=new THREE.Mesh(new THREE.CylinderGeometry(r,r,h,48),m);coin.rotation.x=PI/2;const CG=new THREE.Group();CG.add(coin);CG.position.set(R.position.x+len/2+r*1.6+fs,y0,c.z);G.add(CG);bill(coin);
+    const cl=txtSprite('1 ¢ USD · Ø 19,05 mm',fs*.85,'#e6b48f');cl.position.set(CG.position.x+r*.5,y0-Math.max(r,hh*.5)-fs*.8,c.z);G.add(cl);}
+  G.traverse(o=>{if(o.isMesh)o.userData.key='escala_ref';});host.add(SREF=G);}
+window.updSizeRef=updSizeRef;window.applyShift=applyShift;
 </script>
 </body>
 </html>
