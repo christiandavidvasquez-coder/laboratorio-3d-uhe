@@ -338,9 +338,22 @@ for(const sp of Object.values(SPECIES)){sp.prof=profileFn(sp.keys);sp.X=t=>sp.di
 function ringPoint(sp,t,phi,k=1){
   const p=sp.prof(t),yc=(p.top+p.bot)/2,ry=Math.max((p.top-p.bot)/2,.01),c=Math.cos(phi),s=Math.sin(phi);
   let rz=p.w;if(sp.asym)rz*=c>0?1.18:.82;
-  const e=sp.secExp,cs=Math.sign(c)*Math.pow(Math.abs(c),e),ss=Math.sign(s)*Math.pow(Math.abs(s),e);
+  if(!sp.asym){const pin=sp.pinch??.24;if(s>0)rz*=1-pin*s*s;else rz*=1-(sp.pinchB??.06)*s*s;}
+  const e=s<0&&sp.secExpB?sp.secExpB:sp.secExp,cs=Math.sign(c)*Math.pow(Math.abs(c),e),ss=Math.sign(s)*Math.pow(Math.abs(s),e);
   return new V(sp.X(t),yc+ry*ss*k,rz*cs*k);
 }
+/* borde posterior del opérculo: t en función del ángulo (lado derecho, phi local) */
+function opEdge(sp,ph){const u=clamp((1.0-ph)/2.25,0,1);return sp.th-.035+.03*Math.sin(PI*u);}
+const locPhi=ph=>{let p=ph;if(p>PI/2)p=PI-p;return p;};
+/* cinta plana pegada a la piel (sustituye a los tubos: boca, opérculo, línea lateral) */
+function surfRibbon(sp,tp,w,mat,k=1.006,taper=.15){const P=tp.map(([t,ph])=>ringPoint(sp,t,ph,k)),N=P.length,pos=[],idx=[];
+  for(let i=0;i<N;i++){const a=P[Math.max(0,i-1)],b=P[Math.min(N-1,i+1)],T=b.clone().sub(a).normalize(),ax=axisPoint(sp,tp[i][0]),n=P[i].clone().sub(ax).normalize(),sd=new V().crossVectors(T,n).normalize();
+    const u=i/(N-1),ww=w*Math.min(1,u/taper,(1-u)/taper)*.5+w*.12;pos.push(...P[i].clone().addScaledVector(sd,ww).toArray(),...P[i].clone().addScaledVector(sd,-ww).toArray());if(i)idx.push(2*i-2,2*i-1,2*i,2*i-1,2*i+1,2*i);}
+  const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));g.setIndex(idx);g.computeVertexNormals();return new THREE.Mesh(g,mat);}
+function surfPatch(sp,nU,nV,f,k=1){const pos=[],idx=[];for(let i=0;i<=nU;i++)for(let j=0;j<=nV;j++){const [t,ph,kk]=f(i/nU,j/nV);pos.push(...ringPoint(sp,t,ph,kk??k).toArray());}
+  for(let i=0;i<nU;i++)for(let j=0;j<nV;j++){const a=i*(nV+1)+j,b=a+nV+1;idx.push(a,b,a+1,b,b+1,a+1);}
+  const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));g.setIndex(idx);g.computeVertexNormals();return g;}
+const RIBM=(c,o=.85)=>new THREE.MeshStandardMaterial({color:c,roughness:.7,transparent:o<1,opacity:o,side:THREE.DoubleSide,polygonOffset:true,polygonOffsetFactor:-2,depthWrite:o>=1});
 const axisPoint=(sp,t)=>{const p=sp.prof(t);return new V(sp.X(t),(p.top+p.bot)/2,0);};
 const side=(s,ph)=>s>0?ph:PI-ph;
 
@@ -348,7 +361,7 @@ function loft(sp,t0,t1,p0,p1,nT,nP,o={}){
   const pos=[],uv=[],idx=[],k=o.k||1;
   const push=(v,t,ph)=>{pos.push(v.x,v.y,v.z);uv.push(t/sp.tp,(ph+PI/2)/(2*PI));return pos.length/3-1;};
   const grid=[];
-  for(let i=0;i<=nT;i++){const t=lerp(t0,t1,i/nT),row=[];for(let j=0;j<=nP;j++){const ph=lerp(p0,p1,j/nP);row.push(push(ringPoint(sp,t,ph,k),t,ph));}grid.push(row);}
+  for(let i=0;i<=nT;i++){const t=lerp(t0,t1,i/nT),row=[];for(let j=0;j<=nP;j++){const ph=lerp(p0,p1,j/nP);row.push(push(ringPoint(sp,t,ph,o.kf?o.kf(t,ph):k),t,ph));}grid.push(row);}
   for(let i=0;i<nT;i++)for(let j=0;j<nP;j++){const a=grid[i][j],b=grid[i+1][j],c=grid[i+1][j+1],d=grid[i][j+1];idx.push(a,b,d,b,c,d);}
   if(o.sides)for(const ph of [p0,p1]){const rim=[],ctr=[];for(let i=0;i<=nT;i++){const t=lerp(t0,t1,i/nT);rim.push(push(ringPoint(sp,t,ph,k),t,ph));ctr.push(push(axisPoint(sp,t),t,ph));}
     for(let i=0;i<nT;i++)idx.push(rim[i],rim[i+1],ctr[i],rim[i+1],ctr[i+1],ctr[i]);}
@@ -370,25 +383,30 @@ function skinTexture(sp){
   const H={x,bx,U,Vp,pxu,pxv,R:rng(sp.id.length*97+13)};
   H.dv=(stops)=>{const g=x.createLinearGradient(0,0,0,TH);for(const [v,c] of stops)g.addColorStop(v,c);x.fillStyle=g;x.fillRect(0,0,TW,TH);};
   H.sym=(belly,low,mid,high,back)=>H.dv([[0,belly],[.1,low],[.2,mid],[.31,high],[.41,back],[.5,back],[.59,back],[.69,high],[.8,mid],[.9,low],[1,belly]]);
-  H.scales=(size,u0,alpha,v0=0,v1=1)=>{
-    x.save();x.lineWidth=1.3;
-    for(const [col,dx] of [[`rgba(0,0,0,${alpha})`,0],[`rgba(255,255,255,${alpha*.9})`,-1.6]]){
-      x.strokeStyle=col;x.beginPath();let row=0;
-      for(let y=v0*TH;y<v1*TH;y+=size*.55,row++){const off=(row%2)*size/2;for(let X=U(u0*sp.tp)+off;X<TW;X+=size){x.moveTo(X+dx,y-size*.6);x.arc(X+dx,y,size*.6,-PI/2,PI/2);}}
-      x.stroke();}
-    x.restore();
-    bx.save();bx.strokeStyle='rgba(255,255,255,.55)';bx.lineWidth=1;bx.beginPath();let row=0;const s2=size/2;
-    for(let y=v0*TH/2;y<v1*TH/2;y+=s2*.55,row++){const off=(row%2)*s2/2;for(let X=U(u0*sp.tp)/2+off;X<TW/2;X+=s2){bx.moveTo(X,y-s2*.6);bx.arc(X,y,s2*.6,-PI/2,PI/2);}}
-    bx.stroke();bx.restore();
+  /* escamas imbricadas: cada escama es un sprite con relieve propio; las anteriores cubren a las posteriores, como en el pez real */
+  H.scales=(size,u0,alpha,v0=0,v1=1,o={})=>{
+    const S=Math.ceil(size*1.5),c1=document.createElement('canvas');c1.width=c1.height=S;const q=c1.getContext('2d'),r=size*.62,cx=S*.42,cy=S/2;
+    let g=q.createRadialGradient(cx-r*.35,cy,0,cx,cy,r);g.addColorStop(0,'rgba(255,255,255,0)');g.addColorStop(.62,'rgba(255,255,255,0)');g.addColorStop(.86,`rgba(255,255,255,${alpha*.55})`);g.addColorStop(1,`rgba(0,0,0,${alpha*2.2})`);
+    q.fillStyle=g;q.beginPath();q.arc(cx,cy,r,-PI/2,PI/2);q.closePath();q.fill();
+    if(o.ctenoid){q.strokeStyle=`rgba(0,0,0,${alpha*1.6})`;q.lineWidth=.8;for(let a=-1.2;a<=1.2;a+=.3){q.beginPath();q.moveTo(cx+Math.cos(a)*r*.8,cy+Math.sin(a)*r*.8);q.lineTo(cx+Math.cos(a)*r*1.02,cy+Math.sin(a)*r*1.02);q.stroke();}}
+    const S2=Math.ceil(S/2),c2=document.createElement('canvas');c2.width=c2.height=S2;const b2=c2.getContext('2d'),r2=r/2,x2=S2*.42,y2=S2/2;
+    g=b2.createRadialGradient(x2-r2*.5,y2,0,x2-r2*.2,y2,r2*1.05);const hi=o.relief??1;
+    g.addColorStop(0,`rgb(${128+60*hi|0},${128+60*hi|0},${128+60*hi|0})`);g.addColorStop(.75,`rgb(${128+25*hi|0},${128+25*hi|0},${128+25*hi|0})`);g.addColorStop(1,`rgb(${128-45*hi|0},${128-45*hi|0},${128-45*hi|0})`);
+    b2.fillStyle=g;b2.beginPath();b2.arc(x2,y2,r2,0,2*PI);b2.fill();
+    const t0=U(u0*sp.tp),dy=size*.56,dx=size*.86,R2=rng(sp.id.length*31+size);
+    const rows=[];for(let y=v0*TH,row=0;y<v1*TH+size;y+=dy,row++)rows.push([y,row]);
+    for(let X=TW+size;X>=t0-size;X-=dx){const fade=Math.min(1,(X-t0)/(size*3));if(fade<=0)continue;
+      for(const [y,row] of rows){const xx=X+(row%2)*dx/2+(R2()-.5)*size*.28;x.globalAlpha=fade*(.65+.35*R2());x.drawImage(c1,xx-cx,y-cy);bx.globalAlpha=fade;bx.drawImage(c2,xx/2-x2,y/2-y2);}}
+    x.globalAlpha=1;bx.globalAlpha=1;
   };
   H.blob=(u,v,r,col,a)=>{const g=x.createRadialGradient(u,v,0,u,v,r);g.addColorStop(0,col.replace('A',a));g.addColorStop(1,col.replace('A',0));x.fillStyle=g;x.fillRect(u-r,v-r,2*r,2*r);};
   H.headShade=(col,a)=>{for(const s of sp.asym?[1,-1]:[1,-1]){const t=sp.th-.04,u=U(t),v=Vp(side(s,-.1));H.blob(u,v,pxu*.45,col,a);}};
   H.eyeRings=()=>{for(const s of sp.asym?[1]:[1,-1])for(const e of sp.eyes){const u=U(e.t),v=Vp(side(s,e.phi)),rx=e.r*1.55*pxu,ry=e.r*1.55*pxv(e.t);
     x.fillStyle='rgba(20,22,26,.35)';x.beginPath();x.ellipse(u,v,rx,ry,0,0,2*PI);x.fill();
-    x.strokeStyle='rgba(255,255,255,.25)';x.lineWidth=2;x.beginPath();x.ellipse(u,v,rx*1.12,ry*1.12,0,0,2*PI);x.stroke();
+    x.strokeStyle='rgba(255,255,255,.07)';x.lineWidth=2;x.beginPath();x.ellipse(u,v,rx*1.12,ry*1.12,0,0,2*PI);x.stroke();
     const nu=U(e.t*.55),nv=Vp(side(s,e.phi+.05));x.fillStyle='rgba(10,10,12,.7)';for(const d of [0,.35])x.beginPath(),x.ellipse(nu+d*rx,nv,rx*.12,ry*.1,0,0,2*PI),x.fill();}};
-  H.operc=(col,lw)=>{for(const s of [1,-1]){x.strokeStyle=col;x.lineWidth=lw;x.beginPath();
-    for(let i=0;i<=24;i++){const u=i/24,t=sp.th-.075+.02*Math.sin(PI*u),ph=side(s,lerp(.75,-1.05,u));const X=U(t),Y=Vp(ph);i?x.lineTo(X,Y):x.moveTo(X,Y);}x.stroke();}};
+  H.operc=(col,lw)=>{x.save();x.globalAlpha=.35;x.filter='blur(1.5px)';for(const s of [1,-1]){x.strokeStyle=col;x.lineWidth=lw;x.beginPath();
+    for(let i=0;i<=24;i++){const u=i/24,t=sp.th-.075+.02*Math.sin(PI*u),ph=side(s,lerp(.75,-1.05,u));const X=U(t),Y=Vp(ph);i?x.lineTo(X,Y):x.moveTo(X,Y);}x.stroke();}x.restore();};
   PAINT[sp.paint](sp,H);
   const tex=new THREE.CanvasTexture(c);tex.colorSpace=THREE.SRGBColorSpace;tex.anisotropy=8;tex.flipY=false;
   const bump=new THREE.CanvasTexture(b);bump.flipY=false;
@@ -483,7 +501,9 @@ function buildFish(sp){
 }
 function skin(F){
   const sp=F.sp,{tex,bump}=skinTexture(sp);
-  const geo=loft(sp,0,sp.tp,-PI/2,3*PI/2,160,64,{cap0:true,cap1:true});
+  const plate=(t,ph)=>{if(sp.cart||t>sp.th+.02)return 1;const p=locPhi(ph);if(p<-1.3||p>1.05)return 1;const te=opEdge(sp,p),w=sstep(-1.3,-1.0,p)*sstep(1.05,.8,p);
+    return 1+.011*w*(1-sstep(te-.003,te+.004,t))*sstep(te-.14,te-.05,t);};
+  const geo=loft(sp,0,sp.tp,-PI/2,3*PI/2,300,72,{cap0:true,cap1:true,kf:plate});
   F.skinMat=new THREE.MeshStandardMaterial({map:tex,bumpMap:bump,bumpScale:1.2,roughness:sp.rough,metalness:sp.metal,side:THREE.DoubleSide});if(FISH_TEX[sp.id])applyDetail(F.skinMat,...FISH_TEX[sp.id]);
   const m=new THREE.Mesh(geo,F.skinMat);m.userData.key='piel';F.g.skin.add(m);
 }
@@ -511,18 +531,42 @@ function skeleton(F){
   if(sp.ib){const ti=t0+((sp.ib.from+sp.ib.to)/2)*dt;F.lab(F.root,ringPoint(sp,ti+sp.ib.len,sp.ib.phi,sp.ib.k*1.02),sp.ibLab||(sp.id==='salmon'?'Espinas intermusculares (≈29 por filete)':'Intermusculares: pocas y cortas'),['esq'],'intermusculares');}
 }
 function skull(F){
-  const sp=F.sp,th=sp.th,pc=sp.prof(th*.45),ryc=(pc.top-pc.bot)/2,yc=(pc.top+pc.bot)/2;
-  const cra=new THREE.Mesh(new THREE.SphereGeometry(1,24,16),new THREE.MeshStandardMaterial({color:F.BC,roughness:.55,transparent:true,opacity:.5,depthWrite:false}));
-  cra.scale.set(L*th*.34,ryc*.42,pc.w*.5);cra.position.set(sp.X(th*.5),yc+ryc*.35,0);cra.userData.key='craneo';F.g.skull.add(cra);
-  F.lab(F.root,cra.position.clone().add(new V(0,ryc*.42,0)),sp.cart?'Condrocráneo (cartílago)':'Cráneo',['esq'],'craneo');
-  for(const s of [1,-1]){
-    const op=[];for(let i=0;i<12;i++){const a=i/12*2*PI;op.push(ringPoint(sp,th-.045+.032*Math.cos(a),side(s,-.1+.55*Math.sin(a)),.93));}
-    F.b.skull.curve(op,.022,40,true);
-    F.b.skull.curve([[th-.09,.45],[th-.085,-.3],[th-.1,-.85],[th-.14,-1.0]].map(([t,p])=>ringPoint(sp,t,side(s,p),.93)),.022,14);
-    F.b.cleit.curve([[th+.004,1.1],[th+.012,.2],[th+.008,-.8],[th-.01,-1.35]].map(([t,p])=>ringPoint(sp,t,side(s,p),.9)),.04,16);
-    F.b.skull.curve([[.004,0],[.04,-.1],[.085,-.12]].map(([t,p])=>ringPoint(sp,t,side(s,p),.92)),.03,8);
-    F.b.skull.curve([[.006,-.3],[.05,-.6],[.11,-.78]].map(([t,p])=>ringPoint(sp,t,side(s,p),.9)),.035,8);
+  /* cráneo con piezas reconocibles: neurocráneo con cresta supraoccipital, órbitas, premaxilar-maxilar, dentario, serie opercular y radios branquiostegos */
+  const sp=F.sp,th=sp.th,cart=sp.cart,BC=F.BC;
+  const bm=new THREE.MeshStandardMaterial({color:BC,roughness:.6,metalness:0,transparent:true,opacity:.93,side:THREE.DoubleSide});
+  const bm2=new THREE.MeshStandardMaterial({color:cart?BC:'#e4d8b6',roughness:.55,transparent:true,opacity:.93,side:THREE.DoubleSide});
+  const add=(g,key,m=bm)=>{const o=new THREE.Mesh(g,m);o.userData.key=key;F.g.skull.add(o);return o;};
+  const mPhi=sp.mouthPhi||(sp.id==='corvina'?[-.55,-.12]:sp.kind==='tuna'?[-.3,-.22]:[-.25,-.18]),mT=sp.mouthT||(sp.id==='corvina'?.12:sp.kind==='tuna'?.075:.085);
+  const mline=t=>lerp(mPhi[1],mPhi[0],Math.pow(clamp(t/mT,0,1),1.15));
+  /* neurocráneo: bóveda que sigue el perfil dorsal de la cabeza, más estrecha hacia el hocico */
+  add(surfPatch(sp,22,26,(u,v)=>{const t=lerp(.02,th-.05,u),half=lerp(.55,1.25,sstep(0,.5,u));return [t,PI/2+(v-.5)*2*half,lerp(.8,.86,u)];}),'craneo');
+  /* cresta supraoccipital */
+  if(!cart){const a=ringPoint(sp,th*.42,PI/2,.86),b=ringPoint(sp,th-.04,PI/2,.86),c=ringPoint(sp,th-.05,PI/2,1.0),sh=new THREE.BufferGeometry();
+    sh.setAttribute('position',new THREE.Float32BufferAttribute([...a.toArray(),...b.toArray(),...c.toArray()],3));sh.setIndex([0,1,2]);sh.computeVertexNormals();add(sh,'craneo');}
+  /* paraesfenoides (piso del cráneo) */
+  F.b.skull.curve([.03,.08,th*.6,th-.05].map(t=>{const p=axisPoint(sp,t),q=sp.prof(t);p.y+=(q.top-q.bot)*.06;return p;}),.035,12);
+  for(const s of cart?[]:[1,-1]){
+    /* premaxilar y maxilar: placa sobre la hendidura bucal */
+    add(surfPatch(sp,14,4,(u,v)=>{const t=lerp(.006,mT*1.02,u),p=mline(t);return [t,side(s,p+.035+v*lerp(.12,.24,u)),.985];}),'maxilar',bm2);
+    /* dentario: mandíbula inferior, se estrecha hacia la sínfisis */
+    add(surfPatch(sp,14,4,(u,v)=>{const t=lerp(.008,mT*1.08,u),p=mline(Math.min(t,mT));return [t,side(s,p-.035-v*lerp(.1,.3,u)),.985];}),'dentario',bm2);
+    /* opérculo: placa con borde posterior curvo */
+    add(surfPatch(sp,16,8,(u,v)=>{const ph=lerp(-.85,.62,u),te=opEdge(sp,ph);return [lerp(te-.065,te-.006,v),side(s,ph),.965];}),'opercular');
+    /* preopérculo: media luna por delante del opérculo */
+    add(surfPatch(sp,18,3,(u,v)=>{const ph=lerp(-1.12,.5,u),te=opEdge(sp,ph)-.075-.02*Math.sin(PI*u);return [lerp(te-.014,te,v),side(s,ph),.96];}),'preoperculo');
+    /* subopérculo e interopérculo */
+    add(surfPatch(sp,10,4,(u,v)=>{const ph=lerp(-1.22,-.86,v),te=opEdge(sp,ph);return [lerp(te-.1,te-.008,u),side(s,ph),.962];}),'opercular');
+    /* radios branquiostegos */
+    for(let r=0;r<6;r++){const ph=-1.2-r*.06;F.b.skull.curve([[th-.11+r*.008,ph],[th-.07+r*.005,ph-.02],[th-.035,ph-.04]].map(([t,p])=>ringPoint(sp,t,side(s,p),.95)),.012,6);}
   }
+  for(const s of [1,-1])F.b.cleit.curve([[th+.004,1.1],[th+.012,.2],[th+.008,-.8],[th-.01,-1.35]].map(([t,p])=>ringPoint(sp,t,side(s,p),.9)),.04,16);
+  if(cart){const c=new THREE.Mesh(new THREE.SphereGeometry(1,24,16),bm);const pc=sp.prof(th*.45),ryc=(pc.top-pc.bot)/2;c.scale.set(L*th*.34,ryc*.42,pc.w*.5);c.position.set(sp.X(th*.5),(pc.top+pc.bot)/2+ryc*.35,0);c.userData.key='craneo';F.g.skull.add(c);
+    for(const s of [1,-1])F.b.skull.curve([[.006,-.3],[.05,-.6],[.11,-.78]].map(([t,p])=>ringPoint(sp,t,side(s,p),.9)),.035,8);}
+  F.lab(F.root,ringPoint(sp,th*.55,PI/2,1.0).add(new V(0,.15,0)),cart?'Condrocráneo (cartílago)':'Neurocráneo y cresta',['esq'],'craneo');
+  if(!cart){F.lab(F.root,ringPoint(sp,opEdge(sp,-.1)-.03,-.1,1.0),'Opérculo (hueso)',['esq'],'opercular');
+    F.lab(F.root,ringPoint(sp,opEdge(sp,-.6)-.085,-.75,1.0),'Preopérculo',['esq'],'preoperculo');
+    F.lab(F.root,ringPoint(sp,mT*.6,mline(mT*.6)+.15,1.0),'Premaxilar y maxilar',['esq'],'maxilar');
+    F.lab(F.root,ringPoint(sp,mT*.7,mline(mT*.7)-.25,1.0),'Dentario (mandíbula)',['esq'],'dentario');}
   F.lab(F.root,ringPoint(sp,th+.008,-.4,.95),'Cleitro (cintura pectoral)',['esq'],'cleitro');
 }
 function organs(F){
@@ -594,7 +638,7 @@ function caudalFin(F,o){
 function lateralLine(F,phiFn,t0,extra,col='#2a2f33'){
   const sp=F.sp,mat=new THREE.MeshStandardMaterial({color:col,roughness:.6});
   for(const s of [1,-1]){const pts=[];for(let i=0;i<=60;i++){const t=lerp(t0,sp.tp,i/60);pts.push(ringPoint(sp,t,side(s,phiFn(t)),1.006));}
-    const m=new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts),160,.014,5),mat);m.userData.key='linea';F.g.extras.add(m);}
+    const tp=[];for(let i=0;i<=80;i++){const t=lerp(t0,sp.tp,i/80);tp.push([t,side(s,phiFn(t))]);}const m=surfRibbon(sp,tp,.028,RIBM(col,.55),1.004,.05);m.userData.key='linea';F.g.extras.add(m);}
   if(extra){const pr=sp.prof(sp.tp),yc=(pr.top+pr.bot)/2;for(const s of [1,-1]){const a=new V(sp.X(sp.tp),yc,s*.012),b=F.caudalEdge(0);b.z=s*.012;
     const m=new THREE.Mesh(new THREE.TubeGeometry(new THREE.LineCurve3(a,b),8,.012,5),mat);m.userData.key='linea';F.g.caudal.add(m);}}
   const tl=lerp(t0,sp.tp,.6);F.lab(F.root,ringPoint(sp,tl,phiFn(tl),1.03),F.llLabel,['ext'],'linea');
@@ -681,11 +725,11 @@ function finsTuna(F){
 }
 function extras(F){
   const sp=F.sp,eyeMat=new THREE.MeshPhysicalMaterial({color:sp.iris,roughness:.15,metalness:.3,clearcoat:1,clearcoatRoughness:.05}),pup=new THREE.MeshPhysicalMaterial({color:'#050506',roughness:.05,clearcoat:1});
-  const ringM=new THREE.MeshStandardMaterial({color:sp.kind==='tuna'?'#c9d2dc':'#d9c58c',roughness:.3,metalness:.5});
+  const ringM=new THREE.MeshStandardMaterial({color:new THREE.Color(sp.iris).multiplyScalar(.55),roughness:.5,metalness:.2});
   for(const s of sp.asym?[1]:[1,-1])for(const e of sp.eyes){
     const ph=side(s,e.phi),p=ringPoint(sp,e.t,ph,.97),n=new V(0,Math.sin(ph)*.45,Math.cos(ph)).normalize();
-    const eye=new THREE.Mesh(new THREE.SphereGeometry(e.r,24,16),eyeMat);eye.position.copy(p).addScaledVector(n,e.r*.15);eye.scale.set(1,1,.8);eye.lookAt(eye.position.clone().add(n));eye.userData.key='ojo';F.g.extras.add(eye);
-    const ir=new THREE.Mesh(new THREE.TorusGeometry(e.r*.68,e.r*.12,8,28),ringM);ir.position.copy(eye.position).addScaledVector(n,e.r*.66);ir.lookAt(ir.position.clone().add(n));ir.userData.key='ojo';F.g.extras.add(ir);
+    const eye=new THREE.Mesh(new THREE.SphereGeometry(e.r,24,16),eyeMat);eye.position.copy(p).addScaledVector(n,-e.r*.12);eye.scale.set(1,1,.8);eye.lookAt(eye.position.clone().add(n));eye.userData.key='ojo';F.g.extras.add(eye);
+    const ir=new THREE.Mesh(new THREE.TorusGeometry(e.r*.6,e.r*.05,8,28),ringM);ir.position.copy(eye.position).addScaledVector(n,e.r*.66);ir.lookAt(ir.position.clone().add(n));ir.userData.key='ojo';F.g.extras.add(ir);
     const pu=new THREE.Mesh(new THREE.SphereGeometry(e.r*.5,16,12),pup);pu.position.copy(eye.position).addScaledVector(n,e.r*.5);pu.scale.set(1,1,.5);pu.lookAt(pu.position.clone().add(n));pu.userData.key='ojo';F.g.extras.add(pu);
     const orb=new THREE.Mesh(new THREE.TorusGeometry(e.r*1.25,.025,6,24),new THREE.MeshStandardMaterial({color:BONE}));orb.position.copy(p);orb.lookAt(p.clone().add(n));orb.userData.key='craneo';F.g.skull.add(orb);
   }
@@ -693,11 +737,14 @@ function extras(F){
   const dark=new THREE.MeshStandardMaterial({color:'#1e2226',roughness:.5});
   const mouthPhi=sp.mouthPhi||(sp.id==='corvina'?[-.55,-.12]:sp.kind==='tuna'?[-.3,-.22]:[-.25,-.18]);
   const mouthT=sp.mouthT||(sp.id==='corvina'?.12:sp.kind==='tuna'?.075:.085);
+  const lipM=RIBM('#1a1d20',.78),edgeM=RIBM('#22272b',.5),hiM=RIBM('#f2efe6',.18);
   for(const s of [1,-1]){
-    const op=[];for(let i=0;i<=20;i++){const u=i/20;op.push(ringPoint(sp,sp.th-.035+.03*Math.sin(PI*u),side(s,lerp(1.0,-1.25,u)),1.008));}
-    if(!sp.cart){const m=new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(op),40,.018,5),dark);m.userData.key='operculo';F.g.extras.add(m);}
-    const mo=[];for(let i=0;i<=12;i++){const u=i/12;mo.push(ringPoint(sp,lerp(.002,mouthT,u),side(s,lerp(mouthPhi[0],mouthPhi[1],u)),1.01));}
-    const mm=new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(mo),24,.028,6),dark);mm.userData.key='boca';F.g.extras.add(mm);
+    if(!sp.cart){const op=[];for(let i=0;i<=40;i++){const u=i/40,ph=lerp(1.0,-1.25,u);op.push([opEdge(sp,ph)+.0015,side(s,ph)]);}
+      const m=surfRibbon(sp,op,.03,edgeM,1.0105,.12);m.userData.key='operculo';F.g.extras.add(m);}
+    /* hendidura bucal: de la punta del hocico (más alta) a la comisura (más baja), casi recta y con una leve curva hacia abajo */
+    const pTip=mouthPhi[1],pCor=mouthPhi[0],mo=[];for(let i=0;i<=24;i++){const u=i/24;mo.push([lerp(.004,mouthT,u),side(s,lerp(pTip,pCor,Math.pow(u,1.15))-.035*Math.sin(PI*u))]);}
+    const mm=surfRibbon(sp,mo,.026,lipM,1.004,.2);mm.userData.key='boca';F.g.extras.add(mm);
+    const hl=surfRibbon(sp,mo.map(([t,p])=>[t,p+(s>0?.045:-.045)]),.018,hiM,1.003,.25);hl.userData.key='boca';F.g.extras.add(hl);
   }
   if(!sp.cart)F.lab(F.root,ringPoint(sp,sp.th-.04,-.15,1.03),'Opérculo',['ext'],'operculo');
 }
@@ -761,6 +808,10 @@ const INFO={
   radios_caudal:['Radios de la caudal','Se apoyan en las placas hipurales, al final de la columna.'],
   hipural:['Placas hipurales','Último segmento de la columna, en abanico, donde se insertan los radios de la cola.'],
   craneo:['Cráneo','Neurocráneo, mandíbulas, órbitas y opérculos. La cabeza (sin agallas) va a caldos y fondos.'],
+  opercular:['Opérculo, subopérculo e interopérculo','Placas óseas delgadas que forman la tapa de las agallas. Al limpiar la cabeza se levantan para retirar las branquias, que amargan los fondos.'],
+  preoperculo:['Preopérculo','Hueso en media luna por delante del opérculo; en muchas especies (pargos, meros, corvinas) su borde es aserrado y corta: se manipula con cuidado.'],
+  maxilar:['Premaxilar y maxilar','Huesos de la mandíbula superior; el premaxilar lleva los dientes y se proyecta hacia adelante al abrir la boca.'],
+  dentario:['Dentario','Hueso principal de la mandíbula inferior, unido al del otro lado en la sínfisis del mentón.'],
   cleitro:['Cleitro (cintura pectoral)','Hueso en arco detrás del opérculo donde se articula la aleta pectoral. Es el borde óseo del collar o cogote.'],
   cavidad:['Cavidad visceral','Aloja vísceras y gónadas; se vacía en el eviscerado. Su pared es la ventresca.'],
   vejiga:['Vejiga natatoria','Órgano de flotación lleno de gas, bajo la columna.'],
@@ -905,7 +956,7 @@ function fatBlock(id){const f=FAT[id];const bd=f.cls==='mix'?'<span class="badge
 /* perfil: D = alto total / L, pm = posición del alto máximo, sn = alto relativo del hocico, pd = pedúnculo, wr = ancho/alto, wh = cabeza ancha, up = fracción sobre el eje */
 function mkKeys(o){const tp=o.tp||.89,H=o.D*L/2,ts=[0,.012,.03,.055,.08,.15,.24,.34,.45,.57,.68,.78,.84,.87,.89].map(x=>x*tp/.89);
   return ts.map(t=>{let f;if(t<=o.pm){const u=t/o.pm;f=(o.sn??.3)+(1-(o.sn??.3))*Math.pow(Math.sin(u*PI/2),o.hp||1);}else{const u=(t-o.pm)/(tp-o.pm);f=(o.pd??.15)+(1-(o.pd??.15))*Math.pow(Math.cos(u*PI/2),o.tq||1.15);}
-    const tn=o.tn??.07;if(t<tn)f*=.3+.7*Math.sqrt(t/tn);if(t===0)f=o.s0??.06;if(t>=tp-1e-9)f=Math.max(f,o.pd??.15);const h=H*f,up=o.up??.5,yo=(o.sy||0)*H*Math.max(0,1-t/.25),w=Math.max(.04,h*(o.wr??.55)*(1+(o.wh||0)*Math.exp(-(((t-.12)/.13)**2))));
+    const tn=o.tn??.08,s1=o.s1??.2;if(t<tn)f*=s1+(1-s1)*Math.pow(t/tn,o.tpw??.82);if(t===0)f=o.s0??.09;if(t>=tp-1e-9)f=Math.max(f,o.pd??.15);const h=H*f,up=o.up??.5,yo=(o.sy||0)*H*Math.max(0,1-t/.25),wn=o.wn??(o.wh?1:.6),w=Math.max(.04,h*(o.wr??.55)*(1+(o.wh||0)*Math.exp(-(((t-.12)/.13)**2)))*(wn+(1-wn)*sstep(0,.17,t)));
     return [t,yo+2*h*up,yo-2*h*(1-up),w];});}
 const HSH={spiny:(u,p)=>u<.2?p*u/.2:p*(1-.72*(u-.2)/.8),soft:(u,p)=>u<.15?p*u/.15:p*(1-.35*(u-.15)/.85),sickle:(u,p)=>u<.12?p*u/.12:p*Math.pow(1-(u-.12)/.88,1.6),
   marlin:(u,p)=>u<.07?p*u/.07:p*(.22+.78*Math.pow(1-(u-.07)/.93,3)),tri:(u,p)=>u<.5?p*u/.5:p*Math.pow(1-(u-.5)/.5,.75),round:(u,p)=>p*Math.pow(Math.sin(PI*u),.6),
@@ -913,9 +964,9 @@ const HSH={spiny:(u,p)=>u<.2?p*u/.2:p*(1-.72*(u-.2)/.8),soft:(u,p)=>u<.15?p*u/.1
 const CAUD={round:(a,b)=>v=>[.3+.7*a*Math.sqrt(1-.85*v*v),b*v],trunc:(a,b)=>v=>[a*(.85+.08*Math.abs(v)),b*v],emarg:(a,b)=>v=>[a*(.72+.42*Math.abs(v)**1.3),b*v],
   forked:(a,b)=>v=>[a*(.32+1.1*Math.abs(v)**1.8),b*v],lunate:(a,b)=>v=>[a*(.35+.85*Math.abs(v)**1.3),b*v],rhomb:(a,b)=>v=>[a*(.42+.98*Math.pow(1-Math.abs(v),1.15)),b*v],
   hetero:(a,b)=>v=>v>=0?[a*(.25+1.9*v**1.15),b*1.15*v]:[a*(.25+.6*(-v)**1.3),b*.62*v]};
-function llSeg(F,phiFn,ta,tb,col,lab){const sp=F.sp,mat=new THREE.MeshStandardMaterial({color:col,roughness:.6});
-  for(const s of [1,-1]){const pts=[];for(let i=0;i<=40;i++){const t=lerp(ta,tb,i/40);pts.push(ringPoint(sp,t,side(s,phiFn(t)),1.006));}
-    const m=new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts),100,.014,5),mat);m.userData.key='linea';F.g.extras.add(m);}
+function llSeg(F,phiFn,ta,tb,col,lab){const sp=F.sp,mat=RIBM(col,.55);
+  for(const s of [1,-1]){const tp=[];for(let i=0;i<=40;i++){const t=lerp(ta,tb,i/40);tp.push([t,side(s,phiFn(t))]);}
+    const m=surfRibbon(sp,tp,.028,mat,1.004,.08);m.userData.key='linea';F.g.extras.add(m);}
   if(lab){const tl=lerp(ta,tb,.55);F.lab(F.root,ringPoint(sp,tl,phiFn(tl),1.03),lab,['ext'],'linea');}}
 function finsGen(F){const sp=F.sp,f=sp.fins,H=sp.H;let last=null;
   const med=(o,sd)=>{const r=medianFin(F,{key:o.key,t0:o.t0,t1:o.t1,side:sd,lean:o.lean??.35,n:o.n??12,spines:o.sp||0,mat:o.col?F.mkFin(o.col,o.op||.9):undefined,ptery:!sp.cart&&o.ptery!==false,h:u=>HSH[o.s||'soft'](u,o.pk*H)});
@@ -934,9 +985,21 @@ function finsGen(F){const sp=F.sp,f=sp.fins,H=sp.H;let last=null;
 }
 /* complementos anatómicos */
 const XTRA={
-  bill(F){const sp=F.sp,b=sp.bill,tip=axisPoint(sp,0);tip.y+=b.y||0;const g=new THREE.CylinderGeometry(.01,b.r,b.len,24,1);const m=new THREE.Mesh(g,new THREE.MeshStandardMaterial({color:b.col,roughness:.4,metalness:.2}));
-    m.rotation.z=-sp.dir*PI/2;m.position.copy(tip).add(new V(sp.dir*(b.len/2-.15),0,0));m.scale.set(b.flat?.32:1,1,b.flat?1.35:1);m.userData.key='pico';F.g.extras.add(m);
-    F.lab(F.root,tip.clone().add(new V(sp.dir*b.len*.6,.15,0)),b.lab,['ext','esq'],'pico');},
+  bill(F){/* el rostro es la prolongación del premaxilar: nace dentro de la cabeza con su misma sección y se afina hasta la punta */
+    const sp=F.sp,b=sp.bill,tb=.07,pb=sp.prof(tb),ry0=(pb.top-pb.bot)/2*.5,rz0=pb.w*.7,yb=(pb.top+pb.bot)/2+ry0*.35,y1=(sp.prof(0).top+sp.prof(0).bot)/2+(b.y||0);
+    const x0=sp.X(tb),xs=sp.X(0),x1=xs+sp.dir*b.len,rys=b.r*(b.flat?.34:.9),rzs=b.r*(b.flat?1.3:.9);
+    const NU=60,NV=28,pos=[],idx=[];
+    for(let i=0;i<=NU;i++){const u=i/NU,x=lerp(x0,x1,u),us=(x-x0)/(xs-x0),k=clamp(us,0,1),e=k*k*(3-2*k),v=Math.max(0,(x-xs)/(x1-xs)),tap=Math.pow(1-v,b.flat?.55:.7);
+      const ry=(us<1?lerp(ry0,rys,e):rys*tap)+.006,rz=(us<1?lerp(rz0,rzs,e):rzs*tap)+.006,yc=us<1?lerp(yb,y1,e):y1-v*v*b.r*.15;
+      for(let j=0;j<=NV;j++){const a=j/NV*2*PI;let c=Math.cos(a),sn=Math.sin(a);if(b.flat){c=Math.sign(c)*Math.abs(c)**.6;sn=Math.sign(sn)*Math.abs(sn)**.8;}pos.push(x,yc+ry*sn,rz*c);}}
+    for(let i=0;i<NU;i++)for(let j=0;j<NV;j++){const a=i*(NV+1)+j,c=a+NV+1;idx.push(a,c,a+1,c,c+1,a+1);}
+    const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));g.setIndex(idx);g.computeVertexNormals();
+    const m=new THREE.Mesh(g,new THREE.MeshStandardMaterial({color:b.col,roughness:.42,metalness:.2,side:THREE.DoubleSide}));m.userData.key='pico';F.g.extras.add(m);
+    /* mandíbula inferior, corta y puntiaguda */
+    const jg=[],ji=[];for(let i=0;i<=20;i++){const u=i/20,x=lerp(sp.X(.07),xs+sp.dir*.3,u),y=lerp(yb-ry0*1.25,y1-b.r*.75,u),r=lerp(ry0*.55,.02,u**1.3);for(let j=0;j<=16;j++){const a=j/16*2*PI;jg.push(x,y+r*.6*Math.sin(a),r*Math.cos(a));}}
+    for(let i=0;i<20;i++)for(let j=0;j<16;j++){const a=i*17+j,c=a+17;ji.push(a,c,a+1,c,c+1,a+1);}
+    const g2=new THREE.BufferGeometry();g2.setAttribute('position',new THREE.Float32BufferAttribute(jg,3));g2.setIndex(ji);g2.computeVertexNormals();const j2=new THREE.Mesh(g2,m.material);j2.userData.key='pico';F.g.extras.add(j2);
+    F.lab(F.root,new V(lerp(xs,x1,.6),y1+.15,0),b.lab,['ext','esq'],'pico');},
   barbels(F){const sp=F.sp,mat=new THREE.MeshStandardMaterial({color:'#3b3f45',roughness:.6});
     for(const s of [1,-1]){const a=ringPoint(sp,.045,side(s,-.25),1);const P=[a,a.clone().add(new V(-sp.dir*.5,-.25,s*.5)),a.clone().add(new V(-sp.dir*1.6,-.7,s*.8)),a.clone().add(new V(-sp.dir*2.8,-1.1,s*.9))];
       const m=new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(P),40,.035,6),mat);m.userData.key='barbillas';F.g.extras.add(m);
@@ -947,13 +1010,20 @@ const XTRA={
     d.rotation.x=PI/2;d.position.copy(p).add(new V(0,-.02,0));d.userData.key='boca';F.g.extras.add(d);
     const r=new THREE.Mesh(new THREE.TorusGeometry(.42,.06,8,28),new THREE.MeshStandardMaterial({color:'#5d4f3f',roughness:.7}));r.rotation.x=PI/2;r.position.copy(d.position);r.userData.key='boca';F.g.extras.add(r);
     F.lab(F.root,p.clone().add(new V(0,-.25,0)),'Boca ventral en ventosa',['ext'],'boca');},
-  headspines(F){const sp=F.sp,mat=new THREE.MeshStandardMaterial({color:'#c25a3e',roughness:.5});
+  headspines(F){const sp=F.sp,mat=new THREE.MeshStandardMaterial({color:'#c96a4c',roughness:.55});
     [[.1,.9],[.14,1.05],[.17,.75],[.2,.95],[.12,.45],[.16,.3],[.2,.2],[.19,-.3],[.15,-.55]].forEach(([t,ph])=>{for(const s of [1,-1]){const a=ringPoint(sp,t,side(s,ph),.99),n=ringPoint(sp,t,side(s,ph),1.25).sub(a).normalize();
-      const c=new THREE.Mesh(new THREE.ConeGeometry(.06,.3,8),mat);c.position.copy(a).addScaledVector(n,.12);c.quaternion.setFromUnitVectors(new V(0,1,0),n);c.userData.key='espinas_cabeza';F.g.extras.add(c);}});
+      const c=new THREE.Mesh(new THREE.ConeGeometry(.055,.24,8),mat);c.position.copy(a).addScaledVector(n,.09);c.quaternion.setFromUnitVectors(new V(0,1,0),n);c.userData.key='espinas_cabeza';F.g.extras.add(c);}});
     F.lab(F.root,ringPoint(sp,.15,.9,1.25),'Espinas y crestas de la cabeza',['ext'],'espinas_cabeza');},
+  cirri(F){/* apéndices dérmicos (cirros): colgajos de piel típicos de los escorpénidos */
+    const sp=F.sp,R=rng(77),mats=['#e3967a','#b9503a','#f1c3a8'].map(c=>new THREE.MeshStandardMaterial({color:c,roughness:.75,side:THREE.DoubleSide}));
+    const leaf=(w,h)=>{const sh=new THREE.Shape();sh.moveTo(-w/2,0);sh.quadraticCurveTo(-w*.6,h*.6,0,h);sh.quadraticCurveTo(w*.6,h*.6,w/2,0);sh.lineTo(-w/2,0);return new THREE.ShapeGeometry(sh,4);};
+    const spots=[];for(let i=0;i<26;i++)spots.push([lerp(.03,.2,R()),lerp(.1,1.35,R()),lerp(.08,.2,R())]);for(let i=0;i<10;i++)spots.push([lerp(.22,.7,R()),lerp(.42,.56,R()),lerp(.04,.07,R())]);spots.push([.085,.95,.32],[.115,.98,.26]);
+    for(const [t,ph,h] of spots)for(const s of [1,-1]){const a=ringPoint(sp,t,side(s,ph),.995),n=ringPoint(sp,t,side(s,ph),1.3).sub(a).normalize();
+      const m=new THREE.Mesh(leaf(h*.8,h*.75),mats[(R()*3)|0]);m.position.copy(a);m.quaternion.setFromUnitVectors(new V(0,1,0),n);m.rotateY(R()*PI);m.rotateX((R()-.5)*.6);m.userData.key='cirros';F.g.extras.add(m);}
+    F.lab(F.root,ringPoint(sp,.1,.98,1.35),'Cirros (colgajos de piel) sobre los ojos',['ext'],'cirros');},
   gills(F){const sp=F.sp,mat=new THREE.MeshStandardMaterial({color:'#1b2430',roughness:.6});
     for(const s of [1,-1])for(let i=0;i<5;i++){const t=sp.th-.06+i*.017,P=[];for(let k=0;k<=8;k++)P.push(ringPoint(sp,t+.004*Math.sin(k/8*PI),side(s,lerp(.35,-.55,k/8)),1.008));
-      const m=new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(P),16,.018,5),mat);m.userData.key='branquias';F.g.extras.add(m);}
+      const m=surfRibbon(sp,P.map((p,k)=>[t+.004*Math.sin(k/8*PI),side(s,lerp(.35,-.55,k/8))]),.035,RIBM('#1b2430',.8),1.006,.2);m.userData.key='branquias';F.g.extras.add(m);}
     F.lab(F.root,ringPoint(sp,sp.th-.03,-.1,1.08),'5 hendiduras branquiales (sin opérculo)',['ext'],'branquias');},
   keels(F){const sp=F.sp,m0=new THREE.MeshStandardMaterial({color:sp.keel||'#30384a',roughness:.4,metalness:.3});
     for(const s of [1,-1]){const p=ringPoint(sp,.862,side(s,0),1);const k=new THREE.Mesh(new THREE.SphereGeometry(1,16,10),m0);k.scale.set(.5,.07,.1);k.position.copy(p);k.userData.key='quilla';F.g.fins.add(k);
@@ -977,7 +1047,10 @@ PAINT.gen=function(sp,H){const{x,U,Vp,R}=H,P=sp.pt;H.sym(...P.pal);
   if(P.plates){x.save();x.strokeStyle='rgba(30,24,18,.55)';x.lineWidth=3;for(let c=0;c<26;c++){const t=lerp(.2,.88,c/25)*sp.tp;for(const s of [1,-1])for(let r=0;r<5;r++){const a=lerp(-.9,1.4,r/5),b=lerp(-.9,1.4,(r+1)/5),[y,h]=ys(s,a,b);x.beginPath();x.moveTo(U(t)-10,y);x.quadraticCurveTo(U(t)+14,y+h/2,U(t)-10,y+h);x.stroke();}}x.restore();}
   if(P.sheen){const g=x.createLinearGradient(0,0,0,TH);g.addColorStop(.25,'rgba(255,255,255,0)');g.addColorStop(.38,`rgba(255,255,255,${P.sheen})`);g.addColorStop(.47,'rgba(255,255,255,0)');g.addColorStop(.53,'rgba(255,255,255,0)');g.addColorStop(.62,`rgba(255,255,255,${P.sheen})`);g.addColorStop(.75,'rgba(255,255,255,0)');x.fillStyle=g;x.fillRect(0,0,TW,TH);}
   H.headShade(P.head||'rgba(40,40,40,A)',P.headA??.25);
-  if(P.sc)H.scales(P.sc,.12,P.scA??.06);
+  if(P.keels){const{bx}=H;for(const ph0 of P.keels)for(const s of [1,-1]){bx.strokeStyle='rgba(235,235,235,.9)';bx.lineWidth=4;bx.beginPath();for(let i=0;i<=40;i++){const t=lerp(.16,.86,i/40)*sp.tp,X=U(t)/2,Y=Vp(side(s,ph0))/2;i?bx.lineTo(X,Y):bx.moveTo(X,Y);}bx.stroke();
+    x.strokeStyle='rgba(230,215,180,.18)';x.lineWidth=5;x.beginPath();for(let i=0;i<=40;i++){const t=lerp(.16,.86,i/40)*sp.tp,X=U(t),Y=Vp(side(s,ph0));i?x.lineTo(X,Y):x.moveTo(X,Y);}x.stroke();}}
+  if(P.sc)H.scales(P.sc,P.sc0??.12,P.scA??.06,0,1,{relief:P.scRel??1,ctenoid:P.ct});
+  {const rg=P.rough||{n:2500,a:.18,r0:.6,r1:1.4},{bx}=H;for(let i=0;i<rg.n;i++){const X=R()*TW/2,Y=R()*TH/2,r=lerp(rg.r0||.6,rg.r1||1.4,R()),v=R()<.5?255:0;bx.fillStyle=`rgba(${v},${v},${v},${rg.a})`;bx.beginPath();bx.arc(X,Y,r,0,2*PI);bx.fill();}}
   if(!sp.cart)H.operc(P.op||'rgba(30,30,30,.45)',3);
   H.eyeRings();
 };
@@ -994,8 +1067,8 @@ mkSp('corvinilla',{name:'Corvinilla (corvinas pequeñas)',short:'Corvinilla',sci
     a:[{key:'anal',t0:.68,t1:.77,s:'spiny',pk:.5,n:10,sp:2,lean:.38,lab:'Anal (2 espinas)'}],pec:{t:.265,phi:-.12,len:1.1,wid:.34,droop:.16,n:14},pel:{t:.285,phi:-1.33,len:.75,wid:.25,sp:1,lab:'Pélvica (torácica)'},
     cau:{type:'rhomb',a:1,b:.78,lab:'Caudal romboidal',lv:.25},ll:{y:t=>.12+.45*Math.exp(-(((t-.3)/.17)**2)),ext:true,lab:'Línea lateral hasta la cola'}}});
 mkSp('brujo',{name:'Pez brujo de Galápagos',short:'Pez brujo',sci:'Pontinus clemensi · Scorpaenidae',nVert:24,nAbd:10,
-  shape:{D:.3,pm:.24,sn:.48,pd:.22,wr:.72,up:.55,sy:.05,hp:.8},eyes:[{t:.1,phi:.62,r:.2}],iris:'#e1a34a',metal:.15,rough:.5,fin:'#d06a48',mouthPhi:[-.45,0],mouthT:.15,xtra:['headspines'],
-  pt:{pal:['#f6dccb','#efa98a','#da6b4c','#bb4535','#8f2e2a'],mottle:{n:120,cols:['rgba(110,40,30,A)','rgba(250,215,190,A)','rgba(140,60,40,A)'],r0:14,r1:44},spots:{n:260,col:'rgba(255,236,220,.55)',r0:2,r1:5},sc:10,scA:.05,head:'rgba(120,40,30,A)',headA:.3,op:'rgba(90,30,25,.5)'},
+  shape:{D:.3,pm:.24,sn:.48,pd:.22,wr:.72,up:.55,sy:.05,hp:.8},eyes:[{t:.1,phi:.62,r:.2}],iris:'#e1a34a',metal:.15,rough:.5,fin:'#d06a48',mouthPhi:[-.45,0],mouthT:.15,xtra:['headspines','cirri'],
+  pt:{pal:['#f6dccb','#efa98a','#da6b4c','#bb4535','#8f2e2a'],mottle:{n:120,cols:['rgba(110,40,30,A)','rgba(250,215,190,A)','rgba(140,60,40,A)'],r0:14,r1:44},spots:{n:260,col:'rgba(255,236,220,.55)',r0:2,r1:5},sc:15,scA:.07,scRel:1.2,ct:true,rough:{n:14000,a:.45,r0:.8,r1:2.2},head:'rgba(120,40,30,A)',headA:.3,op:'rgba(90,30,25,.5)'},
   fins:{d:[{key:'dorsal1',t0:.2,t1:.55,s:'spiny',pk:.55,sp:12,n:12,lean:.3,col:'#d4714f',lab:'Dorsal espinosa (12 espinas)'},{key:'dorsal2',t0:.56,t1:.82,s:'round',pk:.5,sp:1,n:9,col:'#d97b58',lab:'Dorsal blanda',la:.5}],
     a:[{key:'anal',t0:.65,t1:.79,s:'round',pk:.45,sp:3,n:6,col:'#d97b58',lab:'Anal (3 espinas)'}],pec:{t:.24,phi:-.3,len:1.8,wid:.85,flare:.2,droop:.1,n:17,col:'#d06a48',lab:'Pectoral grande en abanico'},
     pel:{t:.26,phi:-1.3,len:.8,wid:.3,sp:1,n:5},cau:{type:'trunc',a:.95,b:.85,lab:'Caudal truncada'},ll:{y:.5,lab:'Línea lateral'}}});
@@ -1047,7 +1120,7 @@ mkSp('lisa',{name:'Lisa',sci:'Mugil cephalus · Mugilidae',nVert:24,nAbd:11,
     cau:{type:'forked',a:.95,b:1.0,lab:'Caudal ahorquillada'},ll:null}});
 mkSp('chame',{name:'Chame',sci:'Dormitator latifrons · Eleotridae',nVert:26,nAbd:11,
   shape:{D:.27,pm:.3,sn:.46,pd:.26,wr:.8,wh:.3,up:.52},eyes:[{t:.075,phi:.6,r:.13}],iris:'#b49a5c',metal:.08,rough:.55,fin:'#5d533f',mouthPhi:[-.2,0],mouthT:.07,
-  pt:{pal:['#d8d1bc','#aba085','#7c7259','#514a37','#363024'],mottle:{n:110,cols:['rgba(40,35,25,A)','rgba(150,140,110,A)'],r0:12,r1:36},sc:12,scA:.07,head:'rgba(40,35,25,A)',headA:.3},
+  pinch:.12,pt:{pal:['#d8d1bc','#aba085','#7c7259','#514a37','#363024'],mottle:{n:110,cols:['rgba(40,35,25,A)','rgba(150,140,110,A)'],r0:12,r1:36},sc:44,sc0:.1,scA:.1,scRel:1.5,ct:true,rough:{n:6000,a:.3},head:'rgba(40,35,25,A)',headA:.3},
   fins:{d:[{key:'dorsal1',t0:.38,t1:.5,s:'round',pk:.5,sp:7,n:7,lean:.25,lab:'Primera dorsal (7 espinas)'},{key:'dorsal2',t0:.55,t1:.71,s:'round',pk:.55,n:9,sp:1,lean:.25,lab:'Segunda dorsal',la:.5}],
     a:[{key:'anal',t0:.58,t1:.71,s:'round',pk:.5,n:9,sp:1,lab:'Anal'}],pec:{t:.27,phi:-.2,len:.95,wid:.45,n:14,lab:'Pectoral redondeada'},pel:{t:.3,phi:-1.4,len:.6,wid:.25,sp:1,n:5,lab:'Pélvicas separadas (no forman ventosa)'},
     cau:{type:'round',a:.85,b:.9,lab:'Caudal redondeada'},ll:null}});
@@ -1073,8 +1146,8 @@ mkSp('bagre',{name:'Bagre marino',short:'Bagre',sci:'Ariidae: Bagre pinnimaculat
     a:[{key:'anal',t0:.62,t1:.76,s:'low',pk:.45,n:20,lean:.25,lab:'Anal'}],pec:{shape:'sickle',t:.25,phi:-.35,len:1.25,wid:.3,sp:1,n:10,lab:'Pectoral con espina'},pel:{t:.46,phi:-1.4,len:.7,wid:.24,n:6,lab:'Pélvica abdominal'},
     cau:{type:'forked',a:1.15,b:1.25,lab:'Caudal profundamente ahorquillada'},ll:{y:t=>.25+.05*t,lab:'Línea lateral'}}});
 mkSp('carachama',{name:'Carachama',sci:'Loricariidae: Chaetostoma spp. y afines',nVert:28,nAbd:9,bladder:null,
-  shape:{D:.18,pm:.22,sn:.45,pd:.2,wr:1.15,wh:.4,up:.66,sy:-.2},eyes:[{t:.09,phi:.95,r:.1}],iris:'#8a7a52',metal:.05,rough:.7,fin:'#5d5040',mouthPhi:[-1.2,-1.0],mouthT:.04,xtra:['sucker'],
-  pt:{pal:['#ad9e80','#7d6f58','#5d5240','#463e31','#3a3329'],plates:true,spots:{n:340,col:'rgba(225,205,165,.5)',r0:2.5,r1:6,a:-.5,b:1.5},sc:0,head:'rgba(30,25,20,A)',headA:.3,op:'rgba(25,20,15,.4)'},
+  shape:{D:.18,pm:.22,sn:.45,pd:.2,wr:1.15,wh:.4,up:.66,sy:-.2,s1:.5,tpw:.45},eyes:[{t:.09,phi:.95,r:.1}],iris:'#8a7a52',metal:.05,rough:.7,fin:'#5d5040',mouthPhi:[-1.2,-1.0],mouthT:.04,xtra:['sucker'],
+  pinch:.5,pinchB:-.05,secExpB:.42,pt:{pal:['#ad9e80','#7d6f58','#5d5240','#463e31','#3a3329'],spots:{n:340,col:'rgba(225,205,165,.45)',r0:2.5,r1:6,a:-.5,b:1.5},sc:52,sc0:.1,scA:.12,scRel:2,ct:true,keels:[.25,.75,1.15],rough:{n:16000,a:.5,r0:.8,r1:1.8},head:'rgba(30,25,20,A)',headA:.3,op:'rgba(25,20,15,.4)'},
   fins:{d:[{key:'dorsal',t0:.28,t1:.5,s:'round',pk:.95,sp:1,n:8,lean:.35,col:'#4d4234',lab:'Dorsal alta con espina'}],ad:{t0:.72,t1:.76,col:'#4d4234',spine:true,pk:.3,lab:'Adiposa con espina'},
     a:[{key:'anal',t0:.62,t1:.68,s:'round',pk:.4,n:5,sp:1,col:'#4d4234',lab:'Anal pequeña'}],pec:{t:.2,phi:-1.05,len:1.35,wid:.5,sp:1,n:6,flare:.9,droop:.05,col:'#4d4234',lab:'Pectoral con espina fuerte'},
     pel:{t:.42,phi:-1.4,len:1.0,wid:.45,sp:1,n:5,flare:.8,droop:.1,col:'#4d4234',lab:'Pélvica ancha'},cau:{type:'emarg',a:.95,b:1.0,col:'#4d4234',lab:'Caudal escotada'},ll:null}});
@@ -1103,6 +1176,7 @@ Object.assign(INFO,{
  brujo:Object.assign({},RND,{intro:['Pez brujo de Galápagos','Pontinus clemensi, pez escorpión de la familia Scorpaenidae, endémico del Pacífico oriental tropical. Es una de las dos especies principales de la «pesca blanca» de Galápagos, de alto valor económico, cultural y ecológico.|Se reconoce por la cabeza grande y armada de espinas y crestas, la pectoral en abanico y el color rojo moteado.|Es el plato insignia de las islas: entero, frito y con patacones; también a la parrilla, al vapor o en salsa de coco.'],
    intro_esq:['Pez brujo · esqueleto','Cabeza ósea con crestas y espinas (rasgo de los escorpénidos). En el modelo, 24 vértebras (esquemático).'],
    espinas_cabeza:['Espinas de la cabeza','Crestas y espinas sobre el cráneo y la mejilla. Se manipula con guantes y se recortan las espinas de la dorsal antes de limpiarlo.'],
+   cirros:['Cirros','Pequeños colgajos de piel sobre los ojos, la cabeza y la línea lateral; rompen la silueta y lo camuflan entre rocas y algas, como en otros peces escorpión.'],
    intro_des:['Pez brujo · despiece','Se sirve entero (frito o a la brasa) o en filetes. La cabeza grande rinde un fumet muy sabroso.']}),
  picudo:Object.assign({},RND,{intro:['Picudo (marlín)','«Picudo» agrupa a los marlines (familia Istiophoridae): en Ecuador destacan el marlín azul (Makaira nigricans) y el picudo gacho (Kajikia audax). En 2025 la flota artesanal que pesca dorado desembarcó cerca de 900 t de picudo, junto con pez espada y albacora.|Se reconoce por el pico redondo, la primera dorsal alta y larga, pélvicas finas y largas, dos quillas por lado en el pedúnculo y caudal lunada.'],
    pico:['Pico (rostro)','Prolongación de la mandíbula superior, de sección redonda en los marlines y aplanada en el pez espada.'],quilla:['Quillas del pedúnculo','Dos por lado en los marlines; estabilizan el nado rápido.'],
@@ -3376,8 +3450,14 @@ function crustacean(H,o){const g=H.g,shell=o.shell,dark=o.dark||shell,legM=o.leg
   car.position.x=0;head.add(car);car.userData.key='cefalotorax';
   if(o.rostrum){const r=new THREE.Mesh(sweepGeo(crv([[o.cl*.9,o.ch*.35,0],[o.cl*1.25,o.ch*.55,0],[o.cl*1.5,o.ch*.6,0]]),u=>[.12*(1-u)+.01,.03],16,6),dark);r.userData.key='rostro';head.add(r);}
   if(o.horns)for(const s of [1,-1]){const c=new THREE.Mesh(new THREE.ConeGeometry(.28,1.1,10),dark);c.position.set(o.cl*.95,o.ch*.75,s*.45);c.rotation.z=-1.1;c.rotation.x=s*.25;c.userData.key='cuernos';head.add(c);}
-  if(o.spines){const sm=dark,R=rng(4);for(let i=0;i<46;i++){const u=R(),a=R()*PI-PI/2*0,ang=lerp(-1.2,1.2,R());const x=lerp(.2,o.cl*.92,u),r=o.ch*carR(1-x/o.cl);
-    const n=new V(0,Math.cos(ang),Math.sin(ang));const c=new THREE.Mesh(new THREE.ConeGeometry(.07,.32,6),sm);c.position.set(x,n.y*r,n.z*r*(o.flat?1.6:1));c.quaternion.setFromUnitVectors(new V(0,1,0),n);c.userData.key='espinas';head.add(c);}}
+  if(o.spines){const sm=dark,R=rng(4),cg=new THREE.ConeGeometry(1,1,7);cg.translate(0,.5,0);
+    for(let row=0;row<13;row++){const ang=lerp(-1.25,1.25,row/12),n=new V(0,Math.cos(ang),Math.sin(ang)),big=Math.abs(ang)<.15||Math.abs(Math.abs(ang)-.75)<.12;
+      for(let k=0;k<9;k++){const x=lerp(.35,o.cl*.9,(k+(row%2)*.5)/9),r=o.ch*carR(x/o.cl)*(1+(o.flat?0:0)),h=(big?.3:.17)*(.8+.4*R())*(.75+.35*x/o.cl),w=h*.32;
+        const p=new V(x,n.y*r*.98,n.z*r*.98*(o.flat?1.6:1)),d=n.clone().multiplyScalar(1).add(new V(.85,0,0)).normalize();
+        const c=new THREE.Mesh(cg,sm);c.scale.set(w,h,w);c.position.copy(p);c.quaternion.setFromUnitVectors(new V(0,1,0),d);c.userData.key='espinas';head.add(c);}}
+    /* surco cervical: separa la región cefálica de la torácica */
+    const gm=mat('surcoC',{color:'#3a140e',roughness:.7});const gp=[];for(let i=0;i<=24;i++){const a=lerp(-1.3,1.3,i/24);gp.push(new V(o.cl*.55,Math.cos(a)*o.ch*1.005,Math.sin(a)*o.cw*1.005*(o.flat?1.6:1)));}
+    const gv=new THREE.Mesh(new THREE.TubeGeometry(crv(gp),40,.03,5),gm);gv.userData.key='cefalotorax';head.add(gv);}
   for(const s of [1,-1]){const st_=new THREE.Mesh(new THREE.CylinderGeometry(.06,.08,.4,8),dark);st_.position.set(o.cl*.98,o.ch*.55,s*o.cw*.35);st_.rotation.x=s*.6;head.add(st_);
     const ey=new THREE.Mesh(new THREE.SphereGeometry(o.eye||.16,14,10),mat('ojoC',{color:'#111',roughness:.2}));ey.position.set(o.cl*1.02,o.ch*.62,s*(o.cw*.35+.2));ey.userData.key='ojo';head.add(ey);}
   // antenas
@@ -3398,7 +3478,10 @@ function crustacean(H,o){const g=H.g,shell=o.shell,dark=o.dark||shell,legM=o.leg
   for(let i=0;i<6;i++){const u0=i/6,u1=(i+1)/6+.015;const pts=[];for(let k=0;k<=6;k++)pts.push(path.getPointAt(Math.min(1,lerp(u0,u1,k/6))));
     const r0=lerp(1,.45,u0),r1=lerp(1,.45,u1);const m=new THREE.Mesh(sweepGeo(crv(pts),u=>{const r=lerp(r0,r1,u)*(1+.08*Math.sin(PI*u));return [o.ch*.8*r,o.cw*.8*r*(o.flat?1.7:1)];},10,20),i%2?shell:o.shell2||shell);
     m.userData.key='abdomen';tail.add(m);segs.push(m);
-    if(o.pleura)for(const s of [1,-1]){const p=path.getPointAt((u0+u1)/2),pl=ellM(.32,.3,.06,dark);pl.position.copy(p).add(new V(0,-o.ch*.45,s*o.cw*.75*lerp(1,.5,u0)));pl.userData.key='abdomen';tail.add(pl);}}
+    if(o.pleura){for(const s of [1,-1]){const p=path.getPointAt((u0+u1)/2),pl=ellM(.32,.3,.06,dark);pl.position.copy(p).add(new V(0,-o.ch*.45,s*o.cw*.75*lerp(1,.5,u0)));pl.userData.key='abdomen';tail.add(pl);
+      const tooth=new THREE.Mesh(new THREE.ConeGeometry(.06,.3,6),dark);tooth.position.copy(pl.position).add(new V(-.18,-.22,0));tooth.rotation.z=2.4;tooth.userData.key='abdomen';tail.add(tooth);}
+      const pm=path.getPointAt(u0+.02),r0b=lerp(1,.45,u0);const ring=[];for(let k=0;k<=20;k++){const a=lerp(-1.4,1.4,k/20);ring.push(new V(pm.x,pm.y+Math.cos(a)*o.ch*.8*r0b*1.02,Math.sin(a)*o.cw*.8*r0b*(o.flat?1.7:1)*1.02));}
+      const gr=new THREE.Mesh(new THREE.TubeGeometry(crv(ring),30,.035,5),mat('surcoA',{color:'#d9c3a0',roughness:.6}));gr.userData.key='abdomen';tail.add(gr);}}
   const end=path.getPointAt(1);const fan=new THREE.Group();fan.position.copy(end);tail.add(fan);
   const tm=new THREE.Mesh(new THREE.ShapeGeometry((()=>{const s=new THREE.Shape();s.moveTo(0,-.25);s.lineTo(-1.2,-.18);s.quadraticCurveTo(-1.45,0,-1.2,.18);s.lineTo(0,.25);return s;})()),o.fanM||dark);tm.rotation.x=-PI/2;tm.userData.key='abanico';fan.add(tm);
   for(const s of [1,-1])for(const k of [0,1]){const u=new THREE.Mesh(new THREE.ShapeGeometry((()=>{const sh=new THREE.Shape();sh.moveTo(0,0);sh.quadraticCurveTo(-.6,s*.55,-1.3,s*(.45+k*.25));sh.quadraticCurveTo(-1.15,s*(.15+k*.2),0,0);return sh;})()),o.fanM||dark);u.rotation.x=-PI/2;u.position.y=.01*k;u.userData.key='abanico';fan.add(u);}
@@ -3407,7 +3490,9 @@ function crustacean(H,o){const g=H.g,shell=o.shell,dark=o.dark||shell,legM=o.leg
   const D=H.grp(['des']);const meat=new THREE.Mesh(sweepGeo(path,u=>{const r=lerp(1,.45,u);return [o.ch*.72*r,o.cw*.72*r*(o.flat?1.7:1)];},24,18),o.meatM||mat('carneMar',{color:'#f1e1d6',roughness:.5}));meat.userData.key='carne_cola';D.add(meat);
   return {head,tail,ant,meat,segs,E,D};}
 const SHM={lang:mat('langS',{color:'#6d6a4f',roughness:.45}),langD:mat('langD',{color:'#3f4a52',roughness:.5}),langC:mat('langC',{color:'#4f6d86',roughness:.4}),
-  pan:phys('panS',{color:'#8b3a2b',roughness:.45,clearcoat:.3}),panD:mat('panD',{color:'#5b2219',roughness:.5}),panL:mat('panL',{color:'#d9b08a',roughness:.5}),
+  pan:phys('panS',{map:spotTex('#7f3324',['#5a1f15','#a24a33','#e8d2ad','#5a1f15'],2600,11,1.5,7),bumpMap:spotTex('#808080',['#c0c0c0','#404040'],5000,12,1,3.5),bumpScale:2.5,roughness:.55,clearcoat:.35,clearcoatRoughness:.4}),
+  panD:mat('panD',{map:spotTex('#5b2219',['#3a120c','#7d3324'],900,13,2,6),roughness:.5}),
+  panL:mat('panL',{map:cvs(256,(x,n)=>{for(let i=0;i<8;i++){x.fillStyle=i%2?'#e3c79c':'#8a3a28';x.fillRect(i*n/8,0,n/8,n);}}),roughness:.5}),
   scy:mat('scyS',{map:spotTex('#9c6a44',['#6e4529','#c89668'],900,3,3,9),roughness:.6}),scyD:mat('scyD',{color:'#6a4429',roughness:.6})};
 defMod('mariscos',{title:'Mariscos del Ecuador',spT:'Especie',quizT:'mariscos del Ecuador',
   modes:[['ext','Externa'],['des','Despiece']],extraSp:[['go:camaron','Camarón blanco','ver su módulo']],
@@ -3598,7 +3683,13 @@ function sliceDisc(R,h,u,nR,amp,paint,seg=64){const r=R(u),sh=new THREE.Shape();
 const fruitMat=(k,base,dots,n,seed,o={})=>phys('fr_'+k,{map:spotTex(base,dots,n,seed,o.r0||1,o.r1||3),roughness:o.rough??.5,clearcoat:o.cc??.3,bumpMap:o.bump?spotTex('#808080',['#a0a0a0','#606060'],4000,seed+1,1,3):null,bumpScale:o.bump||0});
 function fruitItem(H,o){const E=H.grp(['ext']),C=H.grp(['corte']);const m=o.mat;
   const wg=fruitGeo(o.R,o.h,o.nR,o.amp,0,1,64,48,o.rough||0,o.seed||1);if(o.deform){o.deform(wg);wg.computeVertexNormals();}const whole=new THREE.Mesh(wg,m);whole.userData.key=o.key||'fruto';E.add(whole);
-  if(o.stem){const s=new THREE.Mesh(new THREE.CylinderGeometry(o.stem[0],o.stem[0]*1.2,o.stem[1],10),mat('tallo',{color:o.stemCol||'#6b5a33',roughness:.7}));s.position.y=o.h/2+o.stem[1]/2-.05;s.userData.key='pedunculo';E.add(s);if(o.calyx){const c=new THREE.Mesh(fruitGeo(u=>o.calyx*(.4+.6*Math.sin(PI/2*u)),o.calyx*.7,5,.25,0,1,40,10),mat('caliz_'+(o.stemCol||'v'),{color:o.stemCol||'#5f7d2c',roughness:.6}));c.position.y=o.h/2;c.userData.key='pedunculo';E.add(c);}}
+  if(o.stem){/* pedúnculo que nace del fruto con una base ensanchada (cojín) y se curva levemente: ya no es un cilindro suelto */
+    const sr=o.stem[0],sl=o.stem[1];let us=.998;while(us>.6&&o.R(us)<sr*1.25)us-=.002;const rb=Math.max(o.R(us),sr*1.3),y0=(us-.5)*o.h;
+    const pts=[[1e-4,-rb*.5],[rb*.92,-rb*.3],[rb*.98,-rb*.05],[sr*1.75,sr*.45],[sr*1.25,sr*1.3],[sr*1.08,sl*.5],[sr,sl*.92],[sr*1.12,sl],[sr*.7,sl+.04],[1e-4,sl+.05]];
+    const g=latheGeo(pts,24);const p=g.attributes.position;for(let i=0;i<p.count;i++){const y=p.getY(i);if(y>0)p.setX(i,p.getX(i)+Math.pow(y/sl,2)*sl*.14);}g.computeVertexNormals();
+    const tex=cvs(128,(x,n)=>{x.fillStyle=o.stemCol||'#6b5a33';x.fillRect(0,0,n,n);const R=rng(9);for(let i=0;i<160;i++){x.strokeStyle=R()<.5?'rgba(40,30,15,.35)':'rgba(190,170,120,.25)';x.lineWidth=1;const X=R()*n;x.beginPath();x.moveTo(X,0);x.lineTo(X+(R()-.5)*6,n);x.stroke();}});
+    const s=new THREE.Mesh(g,mat('tallo_'+(o.stemCol||'c'),{map:tex,roughness:.85}));s.position.y=y0;s.userData.key='pedunculo';E.add(s);
+    if(o.calyx){const c=new THREE.Mesh(fruitGeo(u=>o.calyx*(.4+.6*Math.sin(PI/2*u)),o.calyx*.7,5,.25,0,1,40,10),mat('caliz_'+(o.stemCol||'v'),{color:o.stemCol||'#5f7d2c',roughness:.6}));c.position.y=y0+rb*.1;c.userData.key='pedunculo';E.add(c);}}
   const top=new THREE.Mesh(fruitGeo(o.R,o.h,o.nR,o.amp,o.cu,1,64,30,o.rough||0,o.seed||1),m);top.userData.key='fruto';C.add(top);
   const bot=new THREE.Mesh(fruitGeo(o.R,o.h,o.nR,o.amp,0,o.cu,64,30,o.rough||0,o.seed||1),m);bot.userData.key='fruto';C.add(bot);
   const y=(o.cu-.5)*o.h;const d1=sliceDisc(o.R,o.h,o.cu,o.nR,o.amp,o.paint);d1.position.y=y+.01;d1.rotation.x=-PI/2;d1.userData.key='corte';top.add(d1);d1.rotation.x=PI/2;
@@ -3625,7 +3716,7 @@ defMod('despensa',{title:'Despensa ecuatoriana',spT:'Producto',quizT:'despensa e
      src:'Revistas Dialnet (Ordóñez et al. 2019; Teddi 2015, citados): Ecuador produce 60–63 % del cacao fino de aroma; Univ. del Azuay (menor acidez y astringencia del Nacional); ESPOL, Chan y Feijoo (2024), perfil sensorial CCN-51 vs. fino de aroma; Rev. Esp. Nutr. Comunitaria, licor de Nacional y CCN-51.',
      build(H){const m=fruitMat('cacN','#d9a52b',['#b77d1e','#e8c45a','#8a5a16'],1600,21,{bump:.6,rough:.6});
        const paint=(x,n)=>{PNT.base(x,n,'#c48a24','#f3efe6',.12);for(let i=0;i<5;i++){const a=i/5*2*PI;for(let k=0;k<2;k++){x.fillStyle='#6b3b6e';x.beginPath();x.ellipse(n/2+Math.cos(a+k*.4)*n*.28,n/2+Math.sin(a+k*.4)*n*.28,n*.08,n*.05,a,0,7);x.fill();}}x.fillStyle='#ece3cf';x.beginPath();x.arc(n/2,n/2,n*.06,0,7);x.fill();};
-       const f=fruitItem(H,{R:u=>2.1*Math.sin(PI*Math.min(1,u*1.05))**.75*(1-.25*u),h:9,nR:10,amp:.07,cu:.5,mat:m,paint,stem:[.25,1.2],rough:.04,seed:3});
+       const f=fruitItem(H,{R:u=>2.1*(u<.5?Math.sin(PI/2*u/.5)**.85:1-.3*sstep(.5,.9,u))*(u>.9?Math.sqrt(Math.max(0,1-((u-.9)/.1)**2)):1),h:9,nR:10,amp:.07,cu:.5,mat:m,paint,stem:[.25,1.2],rough:.04,seed:3});
        H.lab(f.E,[0,0,2.4],'Mazorca con 10 surcos','cascara',['ext']);H.lab(f.C,[1.2,.3,0],'Almendras en mucílago','almendra',['corte']);
        const U=H.grp(['uso']);const R=rng(4);for(let i=0;i<40;i++){const b=ellM(.55,.25,.35,mat('grano',{color:'#6e4429',roughness:.6}));b.position.set(lerp(-3,3,R()),R()*.6,lerp(-2,2,R()));b.rotation.set(R()*3,R()*3,R()*3);H.add(U,b,'grano_seco');}
        H.lab(U,[0,1.3,0],'Granos fermentados y secos','grano_seco',['uso']);}},
@@ -3637,7 +3728,7 @@ defMod('despensa',{title:'Despensa ecuatoriana',spT:'Producto',quizT:'despensa e
      src:'El Universo (2015, 2017): Homero Castro Zurita, 1965, Naranjal, cruces ICS-95 e IMC-67; ULEAM (cruce (ICS-95 × IMC-67) × Oriente 1); Jaimez et al. (2022), PeerJ 10:e12676; Univ. del Azuay (50 % de la superficie sembrada); Rev. Agroind. Science (UNITRU), fermentación con presecado.',
      build(H){const m=fruitMat('cacC','#a8342c',['#7a1f23','#c2563a','#5e1820'],1800,25,{bump:.7,rough:.6});
        const paint=(x,n)=>{PNT.base(x,n,'#8b2a26','#f2ede2',.12);for(let i=0;i<6;i++){const a=i/6*2*PI;for(let k=0;k<2;k++){x.fillStyle='#4a1a52';x.beginPath();x.ellipse(n/2+Math.cos(a+k*.35)*n*.27,n/2+Math.sin(a+k*.35)*n*.27,n*.085,n*.055,a,0,7);x.fill();}}x.fillStyle='#ece3cf';x.beginPath();x.arc(n/2,n/2,n*.06,0,7);x.fill();};
-       const f=fruitItem(H,{R:u=>2.2*Math.sin(PI*Math.min(1,u*1.04))**.7*(1-.18*u),h:9.5,nR:10,amp:.09,cu:.5,mat:m,paint,stem:[.25,1.2],rough:.06,seed:5});
+       const f=fruitItem(H,{R:u=>2.2*(u<.48?Math.sin(PI/2*u/.48)**.75:1-.38*sstep(.48,.9,u))*(u>.9?Math.sqrt(Math.max(0,1-((u-.9)/.1)**2)):1),h:9.5,nR:10,amp:.09,cu:.5,mat:m,paint,stem:[.25,1.2],rough:.06,seed:5});
        H.lab(f.E,[0,0,2.6],'Mazorca rojiza y rugosa','cascara',['ext']);H.lab(f.C,[1.2,.3,0],'Almendras moradas','almendra',['corte']);
        const U=H.grp(['uso']);const R=rng(6);for(let i=0;i<40;i++){const b=ellM(.55,.25,.35,mat('granoC',{color:'#5a3326',roughness:.6}));b.position.set(lerp(-3,3,R()),R()*.6,lerp(-2,2,R()));b.rotation.set(R()*3,R()*3,R()*3);H.add(U,b,'grano_seco');}H.lab(U,[0,1.3,0],'Granos secos','grano_seco',['uso']);}},
    chamburo:{n:'Chamburo · chigualcán',sub:'Vasconcellea pubescens',sci:'Vasconcellea pubescens (= V. cundinamarcensis) · Caricaceae',ecu:true,
