@@ -209,10 +209,12 @@ a.btnlink{display:block;text-align:center;text-decoration:none;color:inherit;box
  #panel #toggle{display:none!important}
  #panel.min{max-height:auto}}
 
-#sruler{position:absolute;bottom:42px;z-index:4;pointer-events:none;display:flex;flex-direction:column;align-items:flex-start;gap:3px}
-#sruler rect{fill:#f4efe4}#sruler line{stroke:#1b272b;stroke-width:1.2}#sruler text{fill:#1b272b;font:700 10px 'Libre Franklin',sans-serif}
-#sruler span{font:600 11.5px 'Libre Franklin',sans-serif;color:#f39a76;text-shadow:0 1px 3px #000}
-@media (max-width:820px){#sruler{bottom:8px}}
+.sruler{position:absolute;z-index:4;pointer-events:none;display:flex;flex-direction:column;gap:3px}
+#srulerH{align-items:flex-start}#srulerV{align-items:flex-end}
+.sruler rect{fill:#f4efe4;opacity:.93}.sruler line{stroke:#1b272b;stroke-width:1.2}.sruler text{fill:#1b272b;font:700 10px 'Libre Franklin',sans-serif}
+.sruler span{font:600 11.5px 'Libre Franklin',sans-serif;color:#f39a76;text-shadow:0 1px 3px #000;white-space:nowrap}
+#scoin{position:absolute;z-index:4;pointer-events:none;display:flex;align-items:center;gap:6px}#scoin svg{flex:none;filter:drop-shadow(0 2px 4px rgba(0,0,0,.6))}
+#scoin span{font:600 11px/1.25 'Libre Franklin',sans-serif;color:#e6b48f;text-shadow:0 1px 3px #000;white-space:nowrap}
 </style>
 <script type="importmap">
 {"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}
@@ -3872,31 +3874,44 @@ let HUDR=null;
 function updSizeRef(){HUDR=null;if(SREF){SREF.parent&&SREF.parent.remove(SREF);SREF.traverse(o=>{if(o.geometry)o.geometry.dispose();});SREF=null;}
   const cmu=cmPerUnit();if(!cmu)return;
   const bb=new THREE.Box3();for(const O of Object.values(OBJ))if(O.root.visible&&O.section===st.sec)bb.union(visBox(O.root));const host=OBJ[st.sp]&&OBJ[st.sp].section===st.sec&&OBJ[st.sp].root.position.lengthSq()<1e-6&&OBJ[st.sp].root.scale.x===1?OBJ[st.sp].root:scene;if(bb.isEmpty()||!isFinite(bb.min.x))return;
-  const sz=bb.getSize(new V()),c=bb.getCenter(new V()),realX=Math.max(sz.x,sz.y)*cmu;let cm=NICE[0];for(const v of NICE)if(v<=realX*.6)cm=v;
-  const G=new THREE.Group();G.userData.sizeRef=true;const fs=Math.max(sz.x,sz.y)*.05;const bill=o=>{o.onBeforeRender=()=>{o.parent.quaternion.copy(camera.quaternion);};};
-  const y0=bb.min.y-Math.max(sz.y*.08,.02);c.z=bb.max.z;
-  if(realX<=12){/* piezas pequeñas: se comparan con un objeto conocido */
-    const r=.9525/cmu,h=.152/cmu,tx=coinTex();tx.center.set(.5,.5);tx.rotation=PI/2;const m=[new THREE.MeshStandardMaterial({color:'#9a5a33',metalness:.7,roughness:.35}),new THREE.MeshStandardMaterial({map:tx,metalness:.6,roughness:.35}),new THREE.MeshStandardMaterial({map:tx,metalness:.6,roughness:.35})];
-    const coin=new THREE.Mesh(new THREE.CylinderGeometry(r,r,h,48),m);coin.rotation.x=PI/2;const CG=new THREE.Group();CG.add(coin);CG.position.set(bb.max.x+r*1.3,bb.min.y+r,c.z);G.add(CG);bill(coin);
-    const f2=Math.max(fs,r*.32);const cl=txtSprite('1 centavo de dólar · Ø 19,05 mm',f2,'#e6b48f');cl.position.set(CG.position.x,bb.min.y-f2*.9,c.z);G.add(cl);}
-  else{/* piezas grandes: regla en pantalla, siempre legible y sin tapar la pieza */HUDR={c:bb.getCenter(new V()),cmu};}
-  G.traverse(o=>{if(o.isMesh)o.userData.key='escala_ref';});host.add(SREF=G);}
+  const sz=bb.getSize(new V()),realX=Math.max(sz.x,sz.y)*cmu;
+  /* muestra de puntos de la superficie visible: con ellos se mide la silueta en pantalla en cada cuadro */
+  const pts=[];const roots=Object.values(OBJ).filter(O=>O.root.visible&&O.section===st.sec).map(O=>O.root);let tot=0;
+  roots.forEach(r=>r.traverse(m=>{if(m.isMesh&&!m.userData.isHL&&m.geometry&&m.geometry.attributes.position)tot+=m.geometry.attributes.position.count;}));
+  const stride=Math.max(1,Math.ceil(tot/1500));
+  roots.forEach(r=>{r.updateMatrixWorld(true);r.traverse(m=>{if(!m.isMesh||m.userData.isHL||m.userData.phantom||!m.geometry||!m.geometry.attributes.position)return;let vis=true,o=m;while(o){if(!o.visible){vis=false;break;}o=o.parent;}if(!vis)return;const p=m.geometry.attributes.position;for(let k=0;k<p.count;k+=stride)pts.push(new V().fromBufferAttribute(p,k).applyMatrix4(m.matrixWorld));});});
+  for(const x of [bb.min.x,bb.max.x])for(const y of [bb.min.y,bb.max.y])for(const w of [bb.min.z,bb.max.z])pts.push(new V(x,y,w));
+  HUDR={c:bb.getCenter(new V()),cmu,pts,small:realX<=12};
+  if(HUDR.small){/* hueco invisible del tamaño del centavo: el encuadre deja sitio para él a la derecha */const r=.9525/cmu,c=HUDR.c,ph=new THREE.Mesh(new THREE.CircleGeometry(r*2.2,8),new THREE.MeshBasicMaterial({transparent:true,opacity:0,depthWrite:false}));ph.userData.phantom=true;ph.raycast=()=>{};
+   const G=new THREE.Group();G.userData.sizeRef=true;G.add(ph);const lp=new V(bb.max.x+r*2.6,c.y,c.z);if(host!==scene)host.worldToLocal(lp);ph.position.copy(lp);host.add(SREF=G);}}
 window.updSizeRef=updSizeRef;window.applyShift=applyShift;
 
-/* regla en pantalla: se recalcula en cada cuadro según el zoom */
-{const el=document.createElement('div');el.id='sruler';stage.appendChild(el);let last='';const R=new V(),A=new V(),B=new V();
- const NC=[.5,1,2,5,10,20,25,50,100,200];
- function loop(){requestAnimationFrame(loop);if(!HUDR){if(el.style.display!=='none')el.style.display='none';last='';return;}
+/* escala en pantalla: regla horizontal bajo la pieza y vertical a su izquierda, ambas centradas en la pieza; en piezas pequeñas, centavo a la derecha a media altura */
+{const H=document.createElement('div'),Vr=document.createElement('div'),C=document.createElement('div');H.id='srulerH';Vr.id='srulerV';C.id='scoin';H.className=Vr.className='sruler';[H,Vr,C].forEach(e=>{e.style.display='none';stage.appendChild(e);});
+ C.innerHTML=`<svg viewBox="0 0 100 100"><defs><radialGradient id="cg" cx=".38" cy=".32" r=".75"><stop offset="0" stop-color="#f2b48a"/><stop offset=".55" stop-color="#b8693c"/><stop offset="1" stop-color="#6e3a1e"/></radialGradient></defs><circle cx="50" cy="50" r="49" fill="url(#cg)"/><circle cx="50" cy="50" r="42" fill="none" stroke="#e7a77c" stroke-width="1.5" opacity=".7"/><text x="50" y="62" text-anchor="middle" font-size="34" font-weight="800" fill="#5a2c14" font-family="Libre Franklin,sans-serif">1¢</text></svg><span>1 centavo de dólar<br>Ø 19,05 mm</span>`;
+ const NC=[.5,1,2,3,5,10,15,20,25,30,40,50,60,80,100,150,200];const R=new V(),A=new V(),B=new V(),P=new V();let lh='',lv='';
+ const fmt=v=>String(+v.toFixed(1)).replace('.',',');
+ function pick(objPx,pxcm,maxL){let cm=NC[0];for(const v of NC)if(v*pxcm<=Math.min(objPx*1.02,maxL))cm=v;return cm;}
+ function ticks(cm,pxcm,vert){const step=cm>=100?10:cm>=20?5:cm>=5?1:cm>=2?.5:.1,n=Math.round(cm/step),per=step<1?Math.round(1/step):(cm>=100?5:cm>=20?2:5);let t='';
+  for(let k=0;k<=n;k++){const d=(k*step*pxcm).toFixed(1),L=(k%per===0||k===n)?12:7;t+=vert?`<line y1="${d}" y2="${d}" x1="28" x2="${28-L}"/>`:`<line x1="${d}" x2="${d}" y1="0" y2="${L}"/>`;}return t;}
+ function hor(cm,pxcm){const px=cm*pxcm;let tx='';for(const v of [0,cm/2,cm])tx+=`<text x="${(v*pxcm).toFixed(1)}" y="24" text-anchor="${v===0?'start':v===cm?'end':'middle'}">${fmt(v)}</text>`;
+  return `<svg width="${px+2}" height="28" viewBox="-1 0 ${px+2} 28"><rect width="${px}" height="28" rx="2"/>${ticks(cm,pxcm,false)}${tx}</svg><span>${fmt(cm)} cm de largo</span>`;}
+ function ver(cm,pxcm){const px=cm*pxcm;let tx='';for(const v of [0,cm/2,cm]){const y=px-v*pxcm;tx+=`<text x="4" y="${(v===0?y-3:v===cm?y+10:y+4).toFixed(1)}">${fmt(v)}</text>`;}
+  return `<span>${fmt(cm)} cm de alto</span><svg width="28" height="${px+2}" viewBox="0 -1 28 ${px+2}"><rect width="28" height="${px}" rx="2"/>${ticks(cm,pxcm,true)}${tx}</svg>`;}
+ function hide(){if(H.style.display!=='none')[H,Vr,C].forEach(e=>e.style.display='none');lh=lv='';}
+ function loop(){requestAnimationFrame(loop);if(!HUDR){hide();return;}
   const w=canvas.clientWidth,h=canvas.clientHeight;camera.updateMatrixWorld();R.setFromMatrixColumn(camera.matrixWorld,0).normalize();
-  A.copy(HUDR.c).project(camera);B.copy(HUDR.c).addScaledVector(R,1/HUDR.cmu).project(camera);const pxcm=Math.abs(B.x-A.x)*w/2;if(!isFinite(pxcm)||pxcm<=0){el.style.display='none';return;}
-  const maxW=Math.min(w*.5,520);let cm=NC[0];for(const v of NC)if(v*pxcm<=maxW)cm=v;const px=Math.round(cm*pxcm);
-  const step=cm>=100?10:cm>=20?5:cm>=5?1:cm>=2?.5:.1,lab=cm>=5||cm%1===0;
-  let cx=(A.x+1)/2*w;cx=Math.max(px/2+12,Math.min(w-px/2-12,cx));
-  const key=cm+'|'+px;el.style.display='';el.style.left=(cx-px/2)+'px';
-  if(key===last)return;last=key;
-  let t='';const n=Math.round(cm/step);for(let k=0;k<=n;k++){const x=(k*step*pxcm).toFixed(1),maj=k%(step<1?Math.round(1/step):(cm>=100?5:cm>=20?2:5))===0||k===n;t+=`<line x1="${x}" x2="${x}" y1="0" y2="${maj?12:7}"/>`;}
-  const nl=cm>=100?[0,cm/2,cm]:cm>=20?[0,cm/2,cm]:[0,cm];let tx='';for(const v of nl)tx+=`<text x="${(v*pxcm).toFixed(1)}" y="24" text-anchor="${v===0?'start':v===cm?'end':'middle'}">${String(v).replace('.',',')}</text>`;
-  el.innerHTML=`<svg width="${px+2}" height="28" viewBox="-1 0 ${px+2} 28"><rect x="0" y="0" width="${px}" height="28" rx="2"/>${t}${tx}</svg><span>${String(cm).replace('.',',')} cm · escala aproximada</span>`;}
+  A.copy(HUDR.c).project(camera);B.copy(HUDR.c).addScaledVector(R,1/HUDR.cmu).project(camera);const pxcm=Math.abs(B.x-A.x)*w/2;if(!isFinite(pxcm)||pxcm<=0||A.z>1){hide();return;}
+  let x0=1e9,x1=-1e9,y0=1e9,y1=-1e9;for(const p of HUDR.pts){P.copy(p).project(camera);if(P.z>1)continue;const X=(P.x+1)/2*w,Y=(1-P.y)/2*h;if(X<x0)x0=X;if(X>x1)x1=X;if(Y<y0)y0=Y;if(Y>y1)y1=Y;}
+  const cx=(x0+x1)/2,cy=(y0+y1)/2,gap=14;
+  const ch=pick(x1-x0,pxcm,w*.6),cv=pick(y1-y0,pxcm,h*.6),ph=ch*pxcm,pv=cv*pxcm;
+  if(lh!==ch+'|'+ph.toFixed(0)){lh=ch+'|'+ph.toFixed(0);H.innerHTML=hor(ch,pxcm);}
+  if(lv!==cv+'|'+pv.toFixed(0)){lv=cv+'|'+pv.toFixed(0);Vr.innerHTML=ver(cv,pxcm);}
+  H.style.display=Vr.style.display='';
+  const hl=Math.max(8,Math.min(w-ph-8,cx-ph/2)),ht=Math.min(h-48,y1+gap);H.style.left=hl+'px';H.style.top=ht+'px';
+  const vh=Vr.offsetWidth||40,vl=Math.max(4,x0-gap-vh),vt=Math.max(8,Math.min(h-pv-8,cy-pv/2))-(Vr.firstChild?Vr.firstChild.offsetHeight||0:0);Vr.style.left=vl+'px';Vr.style.top=vt+'px';
+  if(HUDR.small){const d=Math.max(10,1.905*pxcm);C.style.display='';C.firstChild.setAttribute('width',d);C.firstChild.setAttribute('height',d);
+   const inf=$('info'),cr=inf&&!inf.hidden&&inf.offsetWidth&&window.innerWidth>820?inf.offsetLeft-8:w;const lw=(C.lastChild.offsetWidth||90)+6;const cl=Math.max(x0,Math.min(cr-d-lw,x1+gap*1.5));C.style.left=cl+'px';C.style.top=(cy-d/2)+'px';}else C.style.display='none';}
  loop();}
 </script>
 </body>
