@@ -520,7 +520,9 @@ function skin(F){
   const plate=(t,ph)=>{if(sp.cart||t>sp.th+.02)return 1;const p=locPhi(ph);if(p<-1.3||p>1.05)return 1;const te=opEdge(sp,p),w=sstep(-1.3,-1.0,p)*sstep(1.05,.8,p);
     return 1+.011*w*(1-sstep(te-.003,te+.004,t))*sstep(te-.14,te-.05,t);};
   const geo=loft(sp,0,sp.tp,-PI/2,3*PI/2,300,72,{cap0:true,cap1:true,kf:plate});
-  F.skinMat=new THREE.MeshStandardMaterial({map:tex,bumpMap:bump,bumpScale:1.2,roughness:sp.rough,metalness:sp.metal,side:THREE.DoubleSide});if(FISH_TEX[sp.id])applyDetail(F.skinMat,...FISH_TEX[sp.id]);
+  /* acabado de piel como la albacora: brillo húmedo y metálico y microtextura fotográfica (en luminancia, conserva el color de cada especie); mate solo en piel de dentículos o placas */
+  const matte=['carachama','tiburon','gata'].includes(sp.id),rgh=matte?sp.rough:Math.min(sp.rough,.3),mtl=matte?sp.metal:Math.max(sp.metal,.4);
+  F.skinMat=new THREE.MeshStandardMaterial({map:tex,bumpMap:bump,bumpScale:1.2,roughness:rgh,metalness:mtl,side:THREE.DoubleSide});applyDetail(F.skinMat,...(FISH_TEX[sp.id]||['atun',{tile:3.5,amt:.7,col:0,bump:matte?.35:.25}]));
   const m=new THREE.Mesh(geo,F.skinMat);m.userData.key='piel';F.g.skin.add(m);
 }
 function skeleton(F){
