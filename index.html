@@ -424,7 +424,9 @@ function skinTexture(sp){
   H.operc=(col,lw)=>{x.save();x.globalAlpha=.35;x.filter='blur(1.5px)';for(const s of [1,-1]){x.strokeStyle=col;x.lineWidth=lw;x.beginPath();
     for(let i=0;i<=24;i++){const u=i/24,t=sp.th-.075+.02*Math.sin(PI*u),ph=side(s,lerp(.75,-1.05,u));const X=U(t),Y=Vp(ph);i?x.lineTo(X,Y):x.moveTo(X,Y);}x.stroke();}x.restore();};
   PAINT[sp.paint](sp,H);
-  const tex=new THREE.CanvasTexture(c);tex.colorSpace=THREE.SRGBColorSpace;tex.anisotropy=8;tex.flipY=false;
+  /* se pinta a 2048 px pero se sube a la GPU más pequeña: 1536 px en escritorio y 1024 en el móvil (menos memoria con 21 especies cargadas) */
+  const dw=window.innerWidth<=820?1024:1536,c2=document.createElement('canvas');c2.width=dw;c2.height=dw/2;const q2=c2.getContext('2d');q2.imageSmoothingQuality='high';q2.drawImage(c,0,0,dw,dw/2);
+  const tex=new THREE.CanvasTexture(c2);tex.colorSpace=THREE.SRGBColorSpace;tex.anisotropy=window.innerWidth<=820?4:8;tex.flipY=false;
   const bump=new THREE.CanvasTexture(b);bump.flipY=false;
   return{tex,bump};
 }
@@ -1243,51 +1245,65 @@ const SDF={
   /* cadena de conos: miembro con articulaciones; pts=[[x,y,z,r],...] */
   chain(pts){const fs=[];for(let i=0;i<pts.length-1;i++){const a=pts[i],b=pts[i+1];fs.push(SDF.cone(a,b,a[3],b[3]));}return (x,y,z)=>{let d=1e9;for(const f of fs){const v=f(x,y,z);if(v<d)d=v;}return d;};},
   /* tronco a partir de un perfil (como los peces y aves): t∈[0,1] a lo largo de x */
-  trunk(X0,X1,prof,ex=.85){return (x,y,z)=>{const t=(x-X0)/(X1-X0),tc=Math.min(1,Math.max(0,t)),p=prof(tc),yc=(p.top+p.bot)/2,ry=Math.max(.02,(p.top-p.bot)/2),rz=Math.max(.02,p.w);
+  trunk(X0,X1,prof,ex=.85){/* perfil precalculado en una tabla (evaluar la curva en cada punto de la grilla era lo más lento) */const NL=512,TB=new Float32Array((NL+1)*3);for(let i=0;i<=NL;i++){const p=prof(i/NL);TB[i*3]=p.top;TB[i*3+1]=p.bot;TB[i*3+2]=p.w;}
+    const P={top:0,bot:0,w:0},pf=t=>{const f=t*NL,i=Math.min(NL-1,Math.floor(f)),a=f-i,j=i*3;P.top=TB[j]+(TB[j+3]-TB[j])*a;P.bot=TB[j+1]+(TB[j+4]-TB[j+1])*a;P.w=TB[j+2]+(TB[j+5]-TB[j+2])*a;return P;};
+    return (x,y,z)=>{const t=(x-X0)/(X1-X0),tc=Math.min(1,Math.max(0,t)),p=pf(tc),yc=(p.top+p.bot)/2,ry=Math.max(.02,(p.top-p.bot)/2),rz=Math.max(.02,p.w);
     const a=Math.abs((y-yc)/ry),c=Math.abs(z/rz),r=Math.pow(Math.pow(a,2/ex)+Math.pow(c,2/ex),ex/2),dr=(r-1)*Math.min(ry,rz);return Math.max(dr,X0-x,x-X1);};},
   smin(a,b,k){const h=Math.max(k-Math.abs(a-b),0)/k;return Math.min(a,b)-h*h*k*.25;}
 };
 /* parts: [{key, f(x,y,z)}]; varias entradas pueden compartir key. o: {bb:[x0,y0,z0,x1,y1,z1], h, k, skin, meat, keys(opcional: piezas a extraer), skip(keys sin pieza propia)} */
 function sdfBuild(parts,o){
-  const h=o.h,k=o.k??h*3,[X0,Y0,Z0,X1,Y1,Z1]=o.bb,nx=Math.ceil((X1-X0)/h)+1,ny=Math.ceil((Y1-Y0)/h)+1,nz=Math.ceil((Z1-Z0)/h)+1,N=nx*ny*nz;
+  /* resolución adaptada: un poco más gruesa en escritorio y bastante más en el móvil, para que la construcción no bloquee la página */
+  const h=o.h*(window.innerWidth<=820?1.4:1.15),k=o.k??h*3,[X0,Y0,Z0,X1,Y1,Z1]=o.bb,nx=Math.ceil((X1-X0)/h)+1,ny=Math.ceil((Y1-Y0)/h)+1,nz=Math.ceil((Z1-Z0)/h)+1,N=nx*ny*nz;
   const keys=[...new Set(parts.map(p=>p.key))],K=keys.length,kid=parts.map(p=>keys.indexOf(p.key));
   const bodyF=(x,y,z)=>{let d=1e9;for(const p of parts){const v=p.f(x,y,z);d=d>1e8?v:SDF.smin(d,v,k);}return d;};
   const keyD=(x,y,z,out)=>{out.fill(1e9);for(let i=0;i<parts.length;i++){const v=parts[i].f(x,y,z);if(v<out[kid[i]])out[kid[i]]=v;}return out;};
   /* muestreo de la grilla */
-  const body=new Float32Array(N),kd=new Float32Array(N*K),tmp=new Float32Array(K);
+  const T0=performance.now();
+  /* memoria ligera: por punto solo se guardan el cuerpo y las dos piezas más cercanas (antes, una distancia por pieza: cientos de MB en las aves) */
+  const body=new Float32Array(N),d1=new Float32Array(N),d2=new Float32Array(N),k1=new Uint8Array(N),k2=new Uint8Array(N),tmp=new Float32Array(K);
   for(let iz=0;iz<nz;iz++)for(let iy=0;iy<ny;iy++)for(let ix=0;ix<nx;ix++){const x=X0+ix*h,y=Y0+iy*h,z=Z0+iz*h,i=ix+nx*(iy+ny*iz);
     tmp.fill(1e9);let d=0;for(let j=0;j<parts.length;j++){const v=parts[j].f(x,y,z);d=j?SDF.smin(d,v,k):v;if(v<tmp[kid[j]])tmp[kid[j]]=v;}
-    body[i]=d;for(let q=0;q<K;q++)kd[i*K+q]=tmp[q];}
-  const selOf=(q,arr,base)=>{let mo=1e9;for(let j=0;j<K;j++)if(j!==q&&arr[base+j]<mo)mo=arr[base+j];return arr[base+q]-mo;};
+    body[i]=d;let a=1e9,b=1e9,ka=0,kb=0;for(let q=0;q<K;q++){const v=tmp[q];if(v<a){b=a;kb=ka;a=v;ka=q;}else if(v<b){b=v;kb=q;}}d1[i]=a;d2[i]=b;k1[i]=ka;k2[i]=kb;}
+  const T1=performance.now();
+  const selOf=(q,i)=>k1[i]===q?d1[i]-d2[i]:k2[i]===q?d2[i]-d1[i]:Math.max(d2[i]-d1[i],1e-3)+h;
   const pieceField=q=>(x,y,z)=>{const b=bodyF(x,y,z);keyD(x,y,z,tmp);let mo=1e9;for(let j=0;j<K;j++)if(j!==q&&tmp[j]<mo)mo=tmp[j];return K>1?Math.max(b,tmp[q]-mo):b;};
   const skin=new THREE.Color(o.skin||'#e8c9a8'),meat=new THREE.Color(o.meat||'#c9564a'),bone=new THREE.Color(o.bone||'#efe6d2');
+  const VID=new Int32Array(N);
+  const EDG=[[0,1],[2,3],[4,5],[6,7],[0,2],[1,3],[4,6],[5,7],[0,4],[1,5],[2,6],[3,7]],CC=new THREE.Color();
   function mesh(F,Ffn,key){/* surface nets */const meatK=o.meatOf&&key?new THREE.Color(o.meatOf(key)):meat;
-    const vid=new Int32Array(N).fill(-1),pos=[];const idx=[];
-    for(let iz=0;iz<nz-1;iz++)for(let iy=0;iy<ny-1;iy++)for(let ix=0;ix<nx-1;ix++){let m=0;const c=[];for(let q=0;q<8;q++){const dx=q&1,dy=(q>>1)&1,dz=(q>>2)&1,v=F[(ix+dx)+nx*((iy+dy)+ny*(iz+dz))];c.push(v);if(v<0)m|=1<<q;}
+    const vid=VID.fill(-1),pos=[];const idx=[],c=new Float32Array(8);
+    /* solo se recorre la caja de celdas donde la pieza existe (antes se barría la grilla completa por cada pieza) */
+    let x0=nx,x1=-1,y0=ny,y1=-1,z0=nz,z1=-1;for(let iz=0,i=0;iz<nz;iz++)for(let iy=0;iy<ny;iy++)for(let ix=0;ix<nx;ix++,i++)if(F[i]<0){if(ix<x0)x0=ix;if(ix>x1)x1=ix;if(iy<y0)y0=iy;if(iy>y1)y1=iy;if(iz<z0)z0=iz;if(iz>z1)z1=iz;}
+    if(x1<0)return new THREE.BufferGeometry();x0=Math.max(0,x0-1);y0=Math.max(0,y0-1);z0=Math.max(0,z0-1);x1=Math.min(nx-1,x1+1);y1=Math.min(ny-1,y1+1);z1=Math.min(nz-1,z1+1);
+    for(let iz=z0;iz<z1;iz++)for(let iy=y0;iy<y1;iy++)for(let ix=x0;ix<x1;ix++){let m=0;for(let q=0;q<8;q++){const v=F[(ix+(q&1))+nx*((iy+((q>>1)&1))+ny*(iz+((q>>2)&1)))];c[q]=v;if(v<0)m|=1<<q;}
       if(m===0||m===255)continue;let sx=0,sy=0,sz=0,cnt=0;
-      for(const [a,b] of [[0,1],[2,3],[4,5],[6,7],[0,2],[1,3],[4,6],[5,7],[0,4],[1,5],[2,6],[3,7]]){if((c[a]<0)===(c[b]<0))continue;const t=c[a]/(c[a]-c[b]);
+      for(const [a,b] of EDG){if((c[a]<0)===(c[b]<0))continue;const t=c[a]/(c[a]-c[b]);
         sx+=((a&1)+t*((b&1)-(a&1)));sy+=(((a>>1)&1)+t*(((b>>1)&1)-((a>>1)&1)));sz+=(((a>>2)&1)+t*(((b>>2)&1)-((a>>2)&1)));cnt++;}
       vid[ix+nx*(iy+ny*iz)]=pos.length/3;pos.push(X0+(ix+sx/cnt)*h,Y0+(iy+sy/cnt)*h,Z0+(iz+sz/cnt)*h);}
     const C=(x,y,z)=>vid[x+nx*(y+ny*z)];
-    for(let iz=0;iz<nz-1;iz++)for(let iy=0;iy<ny-1;iy++)for(let ix=0;ix<nx-1;ix++){const i0=ix+nx*(iy+ny*iz),v0=F[i0];
+    for(let iz=Math.max(0,z0);iz<z1;iz++)for(let iy=y0;iy<y1;iy++)for(let ix=x0;ix<x1;ix++){const i0=ix+nx*(iy+ny*iz),v0=F[i0];
       if(iy>0&&iz>0){const v1=F[i0+1];if((v0<0)!==(v1<0)){const q=[C(ix,iy-1,iz-1),C(ix,iy,iz-1),C(ix,iy,iz),C(ix,iy-1,iz)];if(q.every(v=>v>=0)){if(v0<0)idx.push(q[0],q[1],q[2],q[0],q[2],q[3]);else idx.push(q[0],q[2],q[1],q[0],q[3],q[2]);}}}
       if(ix>0&&iz>0){const v1=F[i0+nx];if((v0<0)!==(v1<0)){const q=[C(ix-1,iy,iz-1),C(ix,iy,iz-1),C(ix,iy,iz),C(ix-1,iy,iz)];if(q.every(v=>v>=0)){if(v0<0)idx.push(q[0],q[2],q[1],q[0],q[3],q[2]);else idx.push(q[0],q[1],q[2],q[0],q[2],q[3]);}}}
       if(ix>0&&iy>0){const v1=F[i0+nx*ny];if((v0<0)!==(v1<0)){const q=[C(ix-1,iy-1,iz),C(ix,iy-1,iz),C(ix,iy,iz),C(ix-1,iy,iz)];if(q.every(v=>v>=0)){if(v0<0)idx.push(q[0],q[1],q[2],q[0],q[2],q[3]);else idx.push(q[0],q[2],q[1],q[0],q[3],q[2]);}}}}
     /* proyección a la superficie, normales por gradiente y color piel/carne */
     const nrm=new Float32Array(pos.length),col=new Float32Array(pos.length),e=h*.35;
     for(let i=0;i<pos.length;i+=3){let x=pos[i],y=pos[i+1],z=pos[i+2];
-      for(let it=0;it<2;it++){const f=Ffn(x,y,z),gx=Ffn(x+e,y,z)-Ffn(x-e,y,z),gy=Ffn(x,y+e,z)-Ffn(x,y-e,z),gz=Ffn(x,y,z+e)-Ffn(x,y,z-e),g2=(gx*gx+gy*gy+gz*gz)/(4*e*e);if(g2<1e-6)break;const s=f/g2/(2*e);x-=gx*s;y-=gy*s;z-=gz*s;}
-      pos[i]=x;pos[i+1]=y;pos[i+2]=z;const gx=Ffn(x+e,y,z)-Ffn(x-e,y,z),gy=Ffn(x,y+e,z)-Ffn(x,y-e,z),gz=Ffn(x,y,z+e)-Ffn(x,y,z-e),L=Math.hypot(gx,gy,gz)||1;nrm[i]=gx/L;nrm[i+1]=gy/L;nrm[i+2]=gz/L;
-      const bd=bodyF(x,y,z),w=Math.min(1,Math.max(0,(-bd-h*.25)/(h*1.2))),cc=skin.clone().lerp(meatK,w);if(o.boneAt&&w>.5&&o.boneAt(x,y,z))cc.copy(bone);col[i]=cc.r;col[i+1]=cc.g;col[i+2]=cc.b;}
+      /* un solo paso de Newton (los vértices de surface nets ya están a < h de la superficie) y la misma gradiente sirve de normal: 7 evaluaciones por vértice en vez de 20 */
+      const f=Ffn(x,y,z),gx=Ffn(x+e,y,z)-Ffn(x-e,y,z),gy=Ffn(x,y+e,z)-Ffn(x,y-e,z),gz=Ffn(x,y,z+e)-Ffn(x,y,z-e),g2=(gx*gx+gy*gy+gz*gz)/(4*e*e);
+      if(g2>1e-6){const s=f/g2/(2*e);x-=gx*s;y-=gy*s;z-=gz*s;}
+      pos[i]=x;pos[i+1]=y;pos[i+2]=z;const L=Math.hypot(gx,gy,gz)||1;nrm[i]=gx/L;nrm[i+1]=gy/L;nrm[i+2]=gz/L;
+      const bd=bodyF(x,y,z),w=Math.min(1,Math.max(0,(-bd-h*.25)/(h*1.2))),cc=CC.copy(skin).lerp(meatK,w);if(o.boneAt&&w>.5&&o.boneAt(x,y,z))cc.copy(bone);col[i]=cc.r;col[i+1]=cc.g;col[i+2]=cc.b;}
     const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));g.setAttribute('normal',new THREE.Float32BufferAttribute(nrm,3));g.setAttribute('color',new THREE.Float32BufferAttribute(col,3));g.setIndex(idx);return g;}
   const out={keys,body:bodyF,pieces:{}};
   const want=o.keys||keys.filter(q=>!(o.skip||[]).includes(q));
   if(o.whole){out.whole=mesh(body,bodyF);}
-  for(const key of want){const q=keys.indexOf(key);if(q<0)continue;const F=new Float32Array(N);for(let i=0;i<N;i++)F[i]=K>1?Math.max(body[i],selOf(q,kd,i*K)):body[i];
-    const sp=o.split&&o.split[key];if(sp){for(const [suf,sg] of [['_d',1],['_i',-1]]){const F2=new Float32Array(N);for(let i=0;i<N;i++){const iz=Math.floor(i/(nx*ny)),z=Z0+iz*h;F2[i]=Math.max(F[i],-sg*z);}const pf=pieceField(q),ff=(x,y,z)=>Math.max(pf(x,y,z),-sg*z);
+  const F=want.length?new Float32Array(N):null,F2=o.split?new Float32Array(N):null;
+  for(const key of want){const q=keys.indexOf(key);if(q<0)continue;for(let i=0;i<N;i++)F[i]=K>1?Math.max(body[i],selOf(q,i)):body[i];
+    const sp=o.split&&o.split[key];if(sp){for(const [suf,sg] of [['_d',1],['_i',-1]]){for(let i=0;i<N;i++){const iz=Math.floor(i/(nx*ny)),z=Z0+iz*h;F2[i]=Math.max(F[i],-sg*z);}const pf=pieceField(q),ff=(x,y,z)=>Math.max(pf(x,y,z),-sg*z);
       const g=mesh(F2,ff,key);g.computeBoundingBox();out.pieces[key+suf]=g;}continue;}
     const g=mesh(F,pieceField(q),key);g.computeBoundingBox();out.pieces[key]=g;}
-  return out;}
+  (window.__sdfT=window.__sdfT||[]).push([N,parts.length,Math.round(T1-T0),Math.round(performance.now()-T1)]);return out;}
 /* material de canal: color por vértice (piel por fuera, carne en las caras de corte) y textura de piel común */
 function canalMat(o={}){const m=new THREE.MeshPhysicalMaterial({vertexColors:true,roughness:o.rough??.5,clearcoat:o.cc??.25,clearcoatRoughness:.5,sheen:.3,sheenRoughness:.6,sheenColor:new THREE.Color('#fff2e6'),side:THREE.DoubleSide,
   bumpMap:o.bump||null,bumpScale:o.bumpScale??.6,emissive:o.em||'#000000',emissiveIntensity:0});if(o.detail&&typeof applyDetail==='function')applyDetail(m,o.detail,{tile:2.2,amt:.8,col:.45,bump:.6});return m;}
@@ -1374,7 +1390,8 @@ function buildBird(b){
   for(const s of [1,-1]){const RP=(t,ph,k)=>{const p=ringPoint(b,t,ph,k);p.z*=s;return p;};
     J[s]={S:RP(.86,.55,.92),E:RP(.66,.3,1.2),W:RP(.82,.04,1.24),T:RP(.62,-.2,1.2),H:RP(.36,-.5,.72),K:RP(.56,-1.0,1.04),C:new V(b.X(.42),P(.42).bot-b.legDrop,s*b.prof(.42).w*.62)};}
   const A=v=>[v.x,v.y,v.z];const parts=[];const tr=SDF.trunk(b.X(0),b.X(1),b.prof,.9);
-  const cutY=x=>{const t=(x-b.X(0))/(b.X(1)-b.X(0)),p=b.prof(Math.min(1,Math.max(0,t)));return p.bot+(p.top-p.bot)*.42;};
+  const CY=new Float32Array(257);for(let i=0;i<=256;i++){const p=b.prof(i/256);CY[i]=p.bot+(p.top-p.bot)*.42;}
+  const cutY=x=>{const t=Math.min(1,Math.max(0,(x-b.X(0))/(b.X(1)-b.X(0))))*256,i=Math.min(255,t|0);return CY[i]+(CY[i+1]-CY[i])*(t-i);};
   parts.push({key:'pechuga',f:(x,y,z)=>Math.max(tr(x,y,z),y-cutY(x),b.X(.36)-x)});
   parts.push({key:'carcasa',f:(x,y,z)=>Math.min(Math.max(tr(x,y,z),cutY(x)-y),Math.max(tr(x,y,z),x-b.X(.36)))});
   parts.push({key:'cuello',f:SDF.chain([[nb.x-.2,nb.y,0,.42],[nb.x+(ne.x-nb.x)*.5,(nb.y+ne.y)/2+.05,0,.36],[ne.x,ne.y,0,.32]])});
@@ -2059,7 +2076,7 @@ Object.assign(INFO.ovino,{intro_esq:['Ovino · esqueleto','Fórmula vertebral: 7
 /* ================= ESCENA ================= */
 const stage=document.getElementById('stage'),canvas=document.getElementById('c');
 const renderer=new THREE.WebGLRenderer({canvas,antialias:true,alpha:true});
-renderer.setPixelRatio(Math.min(2,window.devicePixelRatio||1));renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.05;
+renderer.setPixelRatio(Math.min(window.innerWidth<=820?1.5:1.75,window.devicePixelRatio||1));renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.05;
 const scene=new THREE.Scene();const pm=new THREE.PMREMGenerator(renderer);scene.environment=pm.fromScene(new RoomEnvironment(),.04).texture;
 scene.add(new THREE.HemisphereLight(0xffffff,0x8d8678,.8));const dl=new THREE.DirectionalLight(0xffffff,.55);dl.position.set(5,10,7);scene.add(dl);{const lb=new THREE.DirectionalLight(0xfff4e8,.45);lb.position.set(-2,-10,3);scene.add(lb);}
 const camera=new THREE.PerspectiveCamera(38,1,.1,300);scene.add(camera);{/* luz que acompaña a la cámara: la pieza queda iluminada desde cualquier ángulo, incluso desde abajo */const key=new THREE.DirectionalLight(0xffffff,1.05);key.position.set(2.5,3,2);const fill=new THREE.DirectionalLight(0xdfe8ff,.4);fill.position.set(-3,-2,1);const tg=new THREE.Object3D();tg.position.set(0,0,-6);camera.add(key,fill,tg);key.target=tg;fill.target=tg;}
@@ -2086,9 +2103,10 @@ function register(O){OBJ[O.sp.id]=O;scene.add(O.root);O.labels.forEach(l=>addLab
 function ensureFish(ids){for(const id of ids)if(!OBJ[id]&&SPECIES[id]){const F=buildFish(SPECIES[id]);F.section='pescados';register(F);}}
 ensureFish(['albacora']);
 const built={pescados:true};
+/* aves y cárnicos se construyen de uno en uno, solo cuando se abren (antes se armaban todos de golpe y bloqueaban la página) */
+function ensureBird(ids){for(const id of ids){const b=BIRDS[id];if(!b||OBJ[id])continue;const O=buildBird(b);O.lab(O.root,new V(-4.6,0,0),b.name,['cmp'],'intro',true);O.section='aves';register(O);}}
+function ensureAnimal(ids){for(const id of ids){const A=ANIMALS[id];if(!A||OBJ[id])continue;const O=buildAnimal(A);O.section='carnicos';register(O);}}
 function ensureBuilt(sec){if(built[sec])return;built[sec]=true;
-  if(sec==='aves')for(const b of Object.values(BIRDS)){const O=buildBird(b);O.lab(O.root,new V(-4.6,0,0),b.name,['cmp'],'intro',true);register(O);}
-  if(sec==='carnicos')for(const A of Object.values(ANIMALS))register(buildAnimal(A));
   if(sec==='camaron')register(buildShrimp());
   if(MODS[sec])MODS[sec].build();
 }
@@ -2202,7 +2220,7 @@ const shadow=new THREE.Mesh(new THREE.PlaneGeometry(1,1),new THREE.MeshBasicMate
 function placeShadow(){const bb=new THREE.Box3();let any=false;for(const O of Object.values(OBJ)){if(O.root.visible){bb.expandByObject(O.root);any=true;}}
   shadow.visible=any&&isFinite(bb.min.y);if(!shadow.visible)return;const s=bb.getSize(new V());shadow.position.set((bb.min.x+bb.max.x)/2,bb.min.y-.04,(bb.min.z+bb.max.z)/2);shadow.scale.set(s.x*1.25,Math.max(s.z*1.6,s.x*.35),1);}
 function layout(){
-  const cmp=st.sp==='comparar';if(st.sec==='pescados')ensureFish(cmp?FISH_IDS:[st.sp]);
+  const cmp=st.sp==='comparar';if(st.sec==='pescados')ensureFish(cmp?FISH_IDS:[st.sp]);if(st.sec==='aves')ensureBird(cmp?Object.keys(BIRDS):[st.sp]);if(st.sec==='carnicos')ensureAnimal([st.sp]);
   for(const O of Object.values(OBJ)){
     const inSec=O.section===st.sec;O.root.visible=inSec&&(cmp||O.sp.id===st.sp);if(!O.root.visible)continue;
     O.root.rotation.set(0,0,0);O.root.position.set(0,0,0);O.root.scale.setScalar(1);
@@ -2352,7 +2370,7 @@ function tick(){
   }
 }
 renderPanel();layout();frame();intro();tick();
-window.__st=st;window.__setSection=setSection;window.__dbg={camera,controls,OBJ,get MODS(){return MODS},frame};
+window.__st=st;window.__setSection=setSection;window.__dbg={camera,controls,OBJ,renderer,get MODS(){return MODS},frame};
 
 /* ================= CIENCIA Y CALIDAD ================= */
 const SRC={usda:'<a href="https://www.fsis.usda.gov/food-safety/safe-food-handling-and-preparation/food-safety-basics/safe-temperature-chart" target="_blank" rel="noopener">USDA FSIS, tabla de temperaturas internas mínimas</a>',
@@ -2493,6 +2511,19 @@ window.__fitVis=(k=1.05)=>{const O=OBJ[st.sp];if(!O)return 0;const bb=new THREE.
  fb.onclick=()=>{const f=cur();if(!f)return;const O=OBJ[st.sp];ov.querySelector('.fo-t').textContent=((O&&O.sp&&(O.sp.name||O.sp.short))||'Producto')+' · foto real';const im=ov.querySelector('img');im.src=f.f;im.alt=f.d||'Foto de referencia';
    ov.querySelector('.fo-c').innerHTML=f.ia?`<b>${f.d}.</b> ${f.a}.`:`${f.d?f.d+'. ':''}Foto: ${f.a} · <a href="${f.u}" target="_blank" rel="noopener">${f.l} · Wikimedia Commons</a>`;ov.querySelector('.fo-t').textContent=ov.querySelector('.fo-t').textContent.replace('foto real',f.ia?'imagen ilustrativa (IA)':'foto real');ov.hidden=false;};
  ov.onclick=e=>{if(e.target===ov||e.target.classList.contains('fo-x'))ov.hidden=true;};document.addEventListener('keydown',e=>{if(e.key==='Escape')ov.hidden=true;});}
+/* ===== aviso de carga: los modelos pesados (aves, cárnicos, peces) se construyen la primera vez que se abren.
+   Se muestra "Preparando modelo…" y se deja pintar la pantalla antes de construir, para que la página no parezca colgada. ===== */
+{const bz=document.createElement('div');bz.id='busyOv';bz.innerHTML='<span class="bzSp"></span>Preparando modelo…';document.body.appendChild(bz);
+ const cs=document.createElement('style');cs.textContent='#busyOv{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:60;display:none;align-items:center;gap:10px;padding:12px 18px;border-radius:12px;background:rgba(58,73,79,.92);color:#fff;font:600 14px "Libre Franklin",system-ui,sans-serif;box-shadow:0 8px 30px rgba(0,0,0,.35)}#busyOv.on{display:flex}#busyOv .bzSp{width:16px;height:16px;border-radius:50%;border:3px solid rgba(255,255,255,.3);border-top-color:#F7632F;animation:bzR .8s linear infinite}@keyframes bzR{to{transform:rotate(360deg)}}';document.head.appendChild(cs);
+ const heavy=(sec,sp)=>{if(!sp)return false;const cmp=sp==='comparar';
+   if(sec==='aves')return (cmp?Object.keys(BIRDS):[sp]).some(id=>BIRDS[id]&&!OBJ[id]);
+   if(sec==='carnicos')return !!ANIMALS[sp]&&!OBJ[sp];
+   if(sec==='pescados')return (cmp?FISH_IDS:[sp]).some(id=>FISH_IDS.includes(id)&&!OBJ[id]);return false;};
+ let pass=false;
+ document.addEventListener('click',e=>{if(pass)return;const b=e.target.closest('#spSeg button,#secSeg button');if(!b)return;
+   let sec=st.sec,sp=b.dataset.sp;if(b.dataset.sec||(sp&&sp.startsWith('go:'))){sec=b.dataset.sec||sp.slice(3);if(sec===st.sec)return;sp=(st.mem[sec]||[])[0];}
+   if(!heavy(sec,sp))return;e.stopImmediatePropagation();e.preventDefault();bz.classList.add('on');
+   requestAnimationFrame(()=>requestAnimationFrame(()=>setTimeout(()=>{pass=true;try{b.click();}finally{pass=false;bz.classList.remove('on');}},0)));},true);}
 
 /* ================= MÓDULOS: base común ================= */
 function mkO(sec,id,name,sci){const root=new THREE.Group();root.userData.sp=id;return {sp:{id,name,sci},section:sec,root,labels:[]};}
